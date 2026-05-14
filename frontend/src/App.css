@@ -2343,14 +2343,14 @@ body {
 @media (max-width: 768px) {
   .header h1 { font-size: 1.8rem; }
   .search-form { flex-direction: column; border-radius: 20px; }
-  .search-input, .search-button { border-radius: 15px; }
+  .search-input, .search-button { border-radius: 15px; font-size: 16px; }
   .ai-summary, .intent-box { padding: 1rem 1.25rem; }
   .ai-stats { flex-direction: column; }
   .intent-suggestions { grid-template-columns: 1fr; }
   .recommendations-grid { grid-template-columns: 1fr; }
   .products-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 1rem; }
   .product-image { height: 150px; }
-  
+
   .chat-fab {
     bottom: 20px;
     left: 20px;
@@ -2358,7 +2358,7 @@ body {
     height: 56px;
     font-size: 24px;
   }
-  
+
   .chat-window {
     bottom: 90px;
     left: 10px;
@@ -2366,4 +2366,117 @@ body {
     width: auto;
     height: 70vh;
   }
+}
+
+/* ============= MOBILE: شامل لكل الأوضاع ============= */
+@media (max-width: 768px) {
+  /* Mode switch — scroll أفقي بدل overflow */
+  .mode-switch {
+    width: calc(100% - 1.5rem);
+    margin: 1rem 0.75rem;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding: 0.35rem;
+  }
+  .mode-switch::-webkit-scrollbar { display: none; }
+  .mode-switch-btn {
+    padding: 0.55rem 1rem;
+    font-size: 0.82rem;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  /* Tansiq page */
+  .tansiq-page { padding: 1rem 0.75rem; }
+  .tansiq-header { flex-direction: column; align-items: stretch; gap: 0.75rem; }
+  .tansiq-title { font-size: 1.25rem; text-align: center; }
+  .tansiq-subtitle { font-size: 0.85rem; text-align: center; }
+  .tansiq-back { align-self: flex-start; }
+  .tansiq-context { font-size: 0.9rem; padding: 0.75rem 1rem; }
+  .tansiq-row { padding: 1rem; border-radius: 14px; }
+  .tansiq-row-search-input { font-size: 16px; }
+  .tansiq-row-search-btn { padding: 0.5rem 1rem; font-size: 0.9rem; }
+  .tansiq-row-search-icon { font-size: 1rem; }
+  .tansiq-carousel-arrow { width: 32px; height: 32px; font-size: 1.3rem; }
+
+  /* Tansiq chat/compose box */
+  .tansiq-chat-box { padding: 1rem; }
+  .tansiq-chat-header h3 { font-size: 1rem; }
+  .tansiq-drop-zone { min-height: 180px; }
+
+  /* Product page (مشروع التنسيقات السريع) */
+  .product-page-app { padding: 1rem 0.75rem; }
+  .product-page-grid { padding: 1rem; gap: 1.5rem; }
+  .product-page-image-side { min-height: 280px; padding: 1rem; }
+  .product-page-main-image { max-height: 260px; }
+  .product-page-title { font-size: 1.1rem; }
+  .product-page-meta-row { flex-direction: column; gap: 0.4rem; font-size: 0.85rem; }
+  .product-page-price-current { font-size: 1.6rem; }
+  .product-page-saved { margin-right: 0; width: fit-content; }
+
+  /* Page tansiq widget */
+  .page-tansiq-widget-header { padding: 0.85rem 1rem; }
+  .page-tansiq-widget-title { font-size: 0.95rem; }
+  .page-tansiq-widget-subtitle { font-size: 0.78rem; }
+  .page-tansiq-widget-body { padding: 0.85rem; gap: 1rem; }
+  .page-tansiq-drop-zone {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+  .page-tansiq-slot { min-height: auto; flex-direction: row; text-align: right; }
+  .page-tansiq-slot img { width: 40px; height: 40px; }
+  .page-tansiq-slot-title { font-size: 0.78rem; min-height: auto; -webkit-line-clamp: 1; }
+  .page-tansiq-row-products {
+    grid-template-columns: repeat(2, 1fr);
+    max-height: 280px;
+  }
+  .page-tansiq-color-chips { gap: 0.3rem; }
+  .page-tansiq-color-chip { font-size: 0.75rem; padding: 0.25rem 0.65rem; }
+
+  /* AI Recommendations inline */
+  .inline-recommendations { padding: 1rem; }
+  .inline-recommendations-header h3 { font-size: 1rem; }
+  .rec-marketing { font-size: 0.78rem; padding: 0.45rem 0.6rem; }
+
+  /* Inline filters */
+  .inline-filter { padding: 1rem 1.25rem; }
+  .inline-filter-title { font-size: 0.95rem; }
+
+  /* AI Image disclaimer */
+  .ai-image-disclaimer { font-size: 0.72rem; padding: 0.4rem 0.6rem; }
+
+  /* Did you mean */
+  .did-you-mean { margin: 0 0.75rem 1rem; font-size: 0.95rem; padding: 0.65rem 1rem; }
+
+  /* Image search & buttons */
+  .image-search-button { width: 48px; height: 48px; font-size: 1.25rem; }
+}
+
+/* ============= MOBILE صغير: < 480px ============= */
+@media (max-width: 480px) {
+  .mode-switch-btn { padding: 0.5rem 0.85rem; font-size: 0.78rem; }
+  .mode-switch-btn:first-child { padding-right: 1rem; }
+  .mode-switch-btn:last-child { padding-left: 1rem; }
+
+  .tansiq-title { font-size: 1.1rem; }
+  .tansiq-row { padding: 0.85rem; }
+
+  .product-page-grid { padding: 0.85rem; gap: 1.25rem; }
+  .product-page-image-side { min-height: 220px; padding: 0.75rem; }
+  .product-page-main-image { max-height: 200px; }
+  .product-page-title { font-size: 1rem; line-height: 1.45; }
+  .product-page-tags { font-size: 0.78rem; }
+  .product-page-price-current { font-size: 1.4rem; }
+
+  .page-tansiq-widget-icon { font-size: 1.4rem; padding: 0.4rem; }
+  .page-tansiq-widget-title { font-size: 0.85rem; }
+  .page-tansiq-row-products { grid-template-columns: 1fr; }
+
+  .recommendations-grid { gap: 0.75rem; }
+
+  .tansiq-row-search { padding: 0.3rem 0.3rem 0.3rem 0.75rem; flex-wrap: wrap; }
+  .tansiq-row-search-input { width: 100%; padding: 0.4rem; }
+  .tansiq-row-search-btn { flex: 1; }
 }
