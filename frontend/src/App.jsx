@@ -2,6 +2,8 @@ import { useState, useRef, useEffect } from 'react'
 import axios from 'axios'
 import './App.css'
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+
 const INITIAL_COUNT = 30
 const LOAD_MORE_COUNT = 30
 const BRANDS_AFTER = 8
@@ -116,7 +118,7 @@ function App() {
     setDisplayCount(INITIAL_COUNT)
 
     try {
-      const response = await axios.get('http://localhost:5000/search', {
+      const response = await axios.get(`${API_URL}/search`, {
         params: { 
           q: searchQuery, 
           limit: 500,
@@ -148,7 +150,7 @@ function App() {
     if (!row) return
     setPageTansiqRows(prev => prev.map(r => r.id === rowId ? { ...r, loading: true, error: '' } : r))
     try {
-      const res = await axios.get('http://localhost:5000/search', {
+      const res = await axios.get(`${API_URL}/search`, {
         params: { q: row.query, limit: 30, skipIntent: 'true' },
       })
       setPageTansiqRows(prev => prev.map(r => r.id === rowId
@@ -188,7 +190,7 @@ function App() {
     setPageTansiqError('')
     setPageTansiqComposedImage(null)
     try {
-      const res = await axios.post('http://localhost:5000/tansiq-compose', { products: all })
+      const res = await axios.post(`${API_URL}/tansiq-compose`, { products: all })
       setPageTansiqComposedImage(res.data.imageUrl)
     } catch (err) {
       setPageTansiqError('فشل توليد الصورة: ' + (err.response?.data?.message || err.message))
@@ -201,7 +203,7 @@ function App() {
     if (!q.trim()) return
     setTansiqRows(prev => prev.map(r => r.id === rowId ? { ...r, loading: true, query: q, error: '' } : r))
     try {
-      const res = await axios.get('http://localhost:5000/search', {
+      const res = await axios.get(`${API_URL}/search`, {
         params: { q, limit: 30, skipIntent: 'true' },
       })
       setTansiqRows(prev => prev.map(r => r.id === rowId
@@ -236,7 +238,7 @@ function App() {
     setTansiqError('')
     setTansiqComposedImage(null)
     try {
-      const res = await axios.post('http://localhost:5000/tansiq-compose', {
+      const res = await axios.post(`${API_URL}/tansiq-compose`, {
         products: tansiqSelected,
       })
       setTansiqComposedImage(res.data.imageUrl)
@@ -265,7 +267,7 @@ function App() {
       setImageLoading(true)
       setError('')
       try {
-        const response = await axios.post('http://localhost:5000/image-search', {
+        const response = await axios.post(`${API_URL}/image-search`, {
           image: ev.target.result,
         })
         const extracted = response.data.query
@@ -358,7 +360,7 @@ function App() {
     setChatLoading(true)
 
     try {
-      const response = await axios.post('http://localhost:5000/chat', {
+      const response = await axios.post(`${API_URL}/chat`, {
         message: message,
         history: chatMessages.map(m => ({
           role: m.role,
