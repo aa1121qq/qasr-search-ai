@@ -625,6 +625,18 @@ body {
 }
 .tansiq-composed-download:hover { text-decoration: underline; }
 
+.ai-image-disclaimer {
+  margin: 0.6rem 0 0.3rem;
+  padding: 0.5rem 0.75rem;
+  background: #FFFBEB;
+  border: 1px solid #FDE68A;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: #92400E;
+  text-align: center;
+}
+
 .tansiq-final {
   margin-top: 1rem;
   background: linear-gradient(135deg, #FFF7ED 0%, #FFEDD5 100%);

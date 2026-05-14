@@ -70,8 +70,8 @@ function App() {
   const [imageLoading, setImageLoading] = useState(false)
   const fileInputRef = useRef(null)
 
-  // Mode switch (مشروع البحث / مشروع التنسيقات)
-  const [mode, setMode] = useState('search') // 'search' | 'tansiq'
+  // Mode switch (الصفحة الافتراضية = تنسيقات السريع AI)
+  const [mode, setMode] = useState('page-tansiq') // 'search' | 'tansiq' | 'page-tansiq'
 
   // Tansiq state: 3 independent rows, each with its own query + products
   const [tansiqRows, setTansiqRows] = useState([
@@ -555,19 +555,19 @@ function App() {
         className={`mode-switch-btn ${mode === 'search' ? 'active' : ''}`}
         onClick={() => setMode('search')}
       >
-        🔍 مشروع البحث
+        🔍 مشروع البحث AI
       </button>
       <button
         className={`mode-switch-btn ${mode === 'tansiq' ? 'active' : ''}`}
         onClick={() => setMode('tansiq')}
       >
-        🎨 مشروع التنسيقات
+        🎨 مشروع التنسيقات المتقدم AI
       </button>
       <button
         className={`mode-switch-btn ${mode === 'page-tansiq' ? 'active' : ''}`}
         onClick={() => setMode('page-tansiq')}
       >
-        📄 تنسيقات صفحة المنتج
+        📄 مشروع تنسيقات السريع AI
       </button>
     </div>
   )
@@ -906,7 +906,7 @@ function TansiqProject({
     <div className="app tansiq-page" dir="rtl">
       {modeSwitch}
       <header className="tansiq-header">
-        <h1 className="tansiq-title">🎨 مشروع التنسيقات</h1>
+        <h1 className="tansiq-title">🎨 مشروع التنسيقات المتقدم AI</h1>
         <p className="tansiq-subtitle">ابحث في كل صف، اسحب 3 منتجات إلى الصندوق، ثم اطلب التصميم</p>
       </header>
 
@@ -977,6 +977,9 @@ function TansiqProject({
             <div className="tansiq-composed">
               <h4>🏠 التصميم النهائي</h4>
               <img src={composedImage} alt="تنسيق منزلي" />
+              <p className="ai-image-disclaimer">
+                ⚠️ قد تختلف صورة المنتج المُنشأة بالذكاء الاصطناعي عن المنتج الموجود في الموقع
+              </p>
               <a href={composedImage} target="_blank" rel="noopener noreferrer" className="tansiq-composed-download">
                 فتح بحجم كامل ↗
               </a>
@@ -1288,6 +1291,9 @@ function PageTansiqProject({
                       <div className="page-tansiq-result">
                         <h4>🏠 ضيافتك الجاهزة</h4>
                         <img src={composedImage} alt="التنسيق النهائي" />
+                        <p className="ai-image-disclaimer">
+                          ⚠️ قد تختلف صورة المنتج المُنشأة بالذكاء الاصطناعي عن المنتج الموجود في الموقع
+                        </p>
                         <a href={composedImage} target="_blank" rel="noopener noreferrer">فتح بحجم كامل ↗</a>
                       </div>
 
