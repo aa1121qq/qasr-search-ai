@@ -625,6 +625,43 @@ body {
 }
 .tansiq-composed-download:hover { text-decoration: underline; }
 
+/* زر اختيار المنتج على الجوال (مخفي على Desktop) */
+.mobile-select-btn {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .mobile-select-btn {
+    display: flex;
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    width: 38px;
+    height: 38px;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: 2px solid white;
+    border-radius: 50%;
+    font-size: 1.4rem;
+    font-weight: 300;
+    line-height: 1;
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(102, 126, 234, 0.45);
+    z-index: 5;
+    padding: 0;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  .mobile-select-btn:active {
+    transform: scale(0.88);
+    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.6);
+    background: linear-gradient(135deg, #5b6ce0 0%, #6a3da0 100%);
+  }
+  /* إخفاء "↤ اسحبني" على الجوال */
+  .tansiq-drag-hint { display: none; }
+}
+
 .ai-image-disclaimer {
   margin: 0.6rem 0 0.3rem;
   padding: 0.5rem 0.75rem;

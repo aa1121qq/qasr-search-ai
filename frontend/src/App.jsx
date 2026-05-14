@@ -28,6 +28,56 @@ const LOCKED_PRODUCT = {
   locked: true,
 }
 
+// 🪄 انميشن: تطير صورة المنتج من البطاقة إلى الصندوق
+function flyToDropZone(sourceEvent, dropZoneSelector, onComplete) {
+  const card = sourceEvent.currentTarget.closest('.tansiq-card, .page-tansiq-mini-card')
+  const img = card?.querySelector('img')
+  const dropZone = document.querySelector(dropZoneSelector)
+  if (!img || !dropZone) { onComplete(); return }
+
+  const sourceRect = img.getBoundingClientRect()
+  const targetRect = dropZone.getBoundingClientRect()
+
+  const clone = img.cloneNode(true)
+  Object.assign(clone.style, {
+    position: 'fixed',
+    left: `${sourceRect.left}px`,
+    top: `${sourceRect.top}px`,
+    width: `${sourceRect.width}px`,
+    height: `${sourceRect.height}px`,
+    margin: '0',
+    padding: '0',
+    zIndex: '9999',
+    pointerEvents: 'none',
+    borderRadius: '12px',
+    boxShadow: '0 14px 36px rgba(102, 126, 234, 0.5)',
+    transition: 'all 0.55s cubic-bezier(0.4, 0, 0.2, 1)',
+    objectFit: 'contain',
+    background: '#FAF9FE',
+  })
+  document.body.appendChild(clone)
+
+  // force reflow ثم تشغيل الانميشن
+  void clone.offsetHeight
+  requestAnimationFrame(() => {
+    const targetX = targetRect.left + targetRect.width / 2 - 28
+    const targetY = targetRect.top + 18
+    Object.assign(clone.style, {
+      left: `${targetX}px`,
+      top: `${targetY}px`,
+      width: '56px',
+      height: '56px',
+      opacity: '0.4',
+      transform: 'scale(0.85) rotate(-6deg)',
+    })
+  })
+
+  setTimeout(() => {
+    clone.remove()
+    onComplete()
+  }, 550)
+}
+
 // كلمات الملحقات للتحقق في الفرونت أيضاً
 const ACCESSORY_KEYWORDS = [
   'وعاء', 'سلة', 'غطاء', 'كيس', 'فلتر', 'ملحق', 'قطعة غيار',
@@ -867,6 +917,11 @@ function TansiqProject({
   const [dragOver, setDragOver] = useState(false)
   const [cartAdded, setCartAdded] = useState(false)
 
+  const handleMobileSelect = (product, e) => {
+    if (selected.length >= 3) return
+    flyToDropZone(e, '.tansiq-drop-zone', () => onDrop(product))
+  }
+
   const extractPriceNum = (priceStr) => {
     if (!priceStr) return 0
     const m = String(priceStr).match(/[\d.]+/)
@@ -920,6 +975,7 @@ function TansiqProject({
               onSearch={(q) => onRowSearch(row.id, q)}
               onQueryChange={(q) => onRowQueryChange(row.id, q)}
               onDragStart={handleDragStart}
+              onMobileSelect={handleMobileSelect}
             />
           ))}
         </div>
@@ -1031,7 +1087,7 @@ function TansiqProject({
   )
 }
 
-function TansiqRow({ row, defaultPlaceholder, onSearch, onQueryChange, onDragStart }) {
+function TansiqRow({ row, defaultPlaceholder, onSearch, onQueryChange, onDragStart, onMobileSelect }) {
   const scrollRef = useRef(null)
 
   const handleSubmit = (e) => {
@@ -1101,6 +1157,16 @@ function TansiqRow({ row, defaultPlaceholder, onSearch, onQueryChange, onDragSta
                 {product.hasDiscount && (
                   <div className="discount-badge">-{product.discountPercentage}%</div>
                 )}
+                <button
+                  type="button"
+                  className="mobile-select-btn"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    e.preventDefault()
+                    onMobileSelect(product, e)
+                  }}
+                  aria-label="إضافة للتنسيق"
+                >+</button>
                 <img src={product.image_link} alt={product.title} className="tansiq-card-image" />
                 <div className="tansiq-card-info">
                   <div className="tansiq-card-title">{product.title}</div>
@@ -1131,6 +1197,11 @@ function PageTansiqProject({
 }) {
   const [dragOver, setDragOver] = useState(false)
   const [cartAdded, setCartAdded] = useState(false)
+
+  const handleMobileSelect = (product, e) => {
+    if (selected.length >= 2) return
+    flyToDropZone(e, '.page-tansiq-drop-zone', () => onDrop(product))
+  }
 
   const extractPriceNum = (priceStr) => {
     if (!priceStr) return 0
@@ -1268,6 +1339,7 @@ function PageTansiqProject({
                       onFetch={() => onFetchRow(row.id)}
                       onSelectColor={(c) => onSelectColor(row.id, c)}
                       onDragStart={handleDragStart}
+                      onMobileSelect={handleMobileSelect}
                     />
                   ))}
 
@@ -1363,7 +1435,7 @@ function PageTansiqProject({
   )
 }
 
-function PageTansiqRow({ row, thermosColor, onFetch, onSelectColor, onDragStart }) {
+function PageTansiqRow({ row, thermosColor, onFetch, onSelectColor, onDragStart, onMobileSelect }) {
   const colors = [...new Set(row.allProducts.map(p => p.color).filter(c => c && c.trim()))]
   const filteredProducts = row.selectedColor
     ? row.allProducts.filter(p => p.color === row.selectedColor)
@@ -1421,6 +1493,16 @@ function PageTansiqRow({ row, thermosColor, onFetch, onSelectColor, onDragStart 
               onDragStart={(e) => onDragStart(e, p)}
               title="اسحب إلى صندوق التنسيق"
             >
+              <button
+                type="button"
+                className="mobile-select-btn"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  e.preventDefault()
+                  onMobileSelect(p, e)
+                }}
+                aria-label="إضافة للتنسيق"
+              >+</button>
               <img src={p.image_link} alt={p.title} />
               <div className="page-tansiq-mini-title">{p.title}</div>
               <div className="page-tansiq-mini-meta">
