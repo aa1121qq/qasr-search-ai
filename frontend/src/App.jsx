@@ -132,6 +132,7 @@ function App() {
   const [tansiqSelected, setTansiqSelected] = useState([])
   const [tansiqComposing, setTansiqComposing] = useState(false)
   const [tansiqComposedImage, setTansiqComposedImage] = useState(null)
+  const [tansiqComposedModel, setTansiqComposedModel] = useState(null)
   const [tansiqError, setTansiqError] = useState('')
 
   // مشروع تنسيقات صفحة المنتج state
@@ -143,6 +144,7 @@ function App() {
   const [pageTansiqSelected, setPageTansiqSelected] = useState([])
   const [pageTansiqComposing, setPageTansiqComposing] = useState(false)
   const [pageTansiqComposedImage, setPageTansiqComposedImage] = useState(null)
+  const [pageTansiqComposedModel, setPageTansiqComposedModel] = useState(null)
   const [pageTansiqError, setPageTansiqError] = useState('')
 
   useEffect(() => {
@@ -239,9 +241,11 @@ function App() {
     setPageTansiqComposing(true)
     setPageTansiqError('')
     setPageTansiqComposedImage(null)
+    setPageTansiqComposedModel(null)
     try {
       const res = await axios.post(`${API_URL}/tansiq-compose`, { products: all })
       setPageTansiqComposedImage(res.data.imageUrl)
+      setPageTansiqComposedModel(res.data.model || null)
     } catch (err) {
       setPageTansiqError('فشل توليد الصورة: ' + (err.response?.data?.message || err.message))
     } finally {
@@ -287,11 +291,13 @@ function App() {
     setTansiqComposing(true)
     setTansiqError('')
     setTansiqComposedImage(null)
+    setTansiqComposedModel(null)
     try {
       const res = await axios.post(`${API_URL}/tansiq-compose`, {
         products: tansiqSelected,
       })
       setTansiqComposedImage(res.data.imageUrl)
+      setTansiqComposedModel(res.data.model || null)
     } catch (err) {
       setTansiqError('فشل توليد الصورة: ' + (err.response?.data?.message || err.message))
     } finally {
@@ -630,6 +636,7 @@ function App() {
         selected={tansiqSelected}
         composing={tansiqComposing}
         composedImage={tansiqComposedImage}
+        composedModel={tansiqComposedModel}
         error={tansiqError}
         onRowSearch={searchTansiqRow}
         onRowQueryChange={updateTansiqQuery}
@@ -650,6 +657,7 @@ function App() {
         selected={pageTansiqSelected}
         composing={pageTansiqComposing}
         composedImage={pageTansiqComposedImage}
+        composedModel={pageTansiqComposedModel}
         error={pageTansiqError}
         onToggleExpand={() => setPageTansiqExpanded(!pageTansiqExpanded)}
         onFetchRow={fetchPageTansiqRow}
@@ -911,7 +919,7 @@ function App() {
 }
 
 function TansiqProject({
-  modeSwitch, rows, selected, composing, composedImage, error,
+  modeSwitch, rows, selected, composing, composedImage, composedModel, error,
   onRowSearch, onRowQueryChange, onDrop, onRemove, onCompose,
 }) {
   const [dragOver, setDragOver] = useState(false)
@@ -1036,6 +1044,11 @@ function TansiqProject({
               <p className="ai-image-disclaimer">
                 ⚠️ قد تختلف صورة المنتج المُنشأة بالذكاء الاصطناعي عن المنتج الموجود في الموقع
               </p>
+              {composedModel && (
+                <p className={`composed-model-tag ${composedModel.includes('gemini') || composedModel.includes('Nano') ? 'is-gemini' : 'is-openai'}`}>
+                  🤖 تم التوليد بـ: <strong>{composedModel}</strong>
+                </p>
+              )}
               <a href={composedImage} target="_blank" rel="noopener noreferrer" className="tansiq-composed-download">
                 فتح بحجم كامل ↗
               </a>
@@ -1192,7 +1205,7 @@ function TansiqRow({ row, defaultPlaceholder, onSearch, onQueryChange, onDragSta
 }
 
 function PageTansiqProject({
-  modeSwitch, lockedProduct, rows, expanded, selected, composing, composedImage, error,
+  modeSwitch, lockedProduct, rows, expanded, selected, composing, composedImage, composedModel, error,
   onToggleExpand, onFetchRow, onSelectColor, onDrop, onRemove, onCompose,
 }) {
   const [dragOver, setDragOver] = useState(false)
@@ -1366,6 +1379,11 @@ function PageTansiqProject({
                         <p className="ai-image-disclaimer">
                           ⚠️ قد تختلف صورة المنتج المُنشأة بالذكاء الاصطناعي عن المنتج الموجود في الموقع
                         </p>
+                        {composedModel && (
+                          <p className={`composed-model-tag ${composedModel.includes('gemini') || composedModel.includes('Nano') ? 'is-gemini' : 'is-openai'}`}>
+                            🤖 تم التوليد بـ: <strong>{composedModel}</strong>
+                          </p>
+                        )}
                         <a href={composedImage} target="_blank" rel="noopener noreferrer">فتح بحجم كامل ↗</a>
                       </div>
 

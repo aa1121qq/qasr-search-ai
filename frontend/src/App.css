@@ -674,6 +674,26 @@ body {
   text-align: center;
 }
 
+.composed-model-tag {
+  margin: 0.4rem 0 0;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.72rem;
+  text-align: center;
+  border-radius: 6px;
+  font-weight: 500;
+}
+.composed-model-tag.is-gemini {
+  background: #EEF2FF;
+  color: #4338CA;
+  border: 1px solid #C7D2FE;
+}
+.composed-model-tag.is-openai {
+  background: #FEF3C7;
+  color: #92400E;
+  border: 1px solid #FDE68A;
+}
+.composed-model-tag strong { font-weight: 700; }
+
 .tansiq-final {
   margin-top: 1rem;
   background: linear-gradient(135deg, #FFF7ED 0%, #FFEDD5 100%);
