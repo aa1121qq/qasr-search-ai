@@ -2427,22 +2427,40 @@ body {
 
 /* ============= MOBILE: شامل لكل الأوضاع ============= */
 @media (max-width: 768px) {
-  /* Mode switch — scroll أفقي بدل overflow */
+  /* Mode switch — مكدّس عمودياً، كل الأزرار ظاهرة */
   .mode-switch {
     width: calc(100% - 1.5rem);
     margin: 1rem 0.75rem;
-    overflow-x: auto;
-    flex-wrap: nowrap;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    padding: 0.35rem;
+    flex-direction: column;
+    border-radius: 16px;
+    padding: 0.4rem;
+    gap: 0.35rem;
+    overflow: visible;
   }
-  .mode-switch::-webkit-scrollbar { display: none; }
   .mode-switch-btn {
-    padding: 0.55rem 1rem;
-    font-size: 0.82rem;
+    width: 100%;
+    padding: 0.7rem 1rem;
+    font-size: 0.88rem;
+    border-radius: 12px;
+    text-align: center;
     white-space: nowrap;
-    flex-shrink: 0;
+    flex-shrink: 1;
+  }
+
+  /* الصورة المُولّدة بالـ AI — تنسيق محسّن على الجوال */
+  .tansiq-composed,
+  .page-tansiq-result {
+    padding: 0.65rem;
+  }
+  .tansiq-composed img,
+  .page-tansiq-result img {
+    width: 100%;
+    height: auto;
+    max-height: 65vh;
+    object-fit: contain;
+    background: #FAF9FE;
+    border-radius: 10px;
+    display: block;
   }
 
   /* Tansiq page */
@@ -2513,9 +2531,9 @@ body {
 
 /* ============= MOBILE صغير: < 480px ============= */
 @media (max-width: 480px) {
-  .mode-switch-btn { padding: 0.5rem 0.85rem; font-size: 0.78rem; }
-  .mode-switch-btn:first-child { padding-right: 1rem; }
-  .mode-switch-btn:last-child { padding-left: 1rem; }
+  .mode-switch-btn { padding: 0.6rem 0.85rem; font-size: 0.82rem; }
+  .tansiq-composed img,
+  .page-tansiq-result img { max-height: 55vh; }
 
   .tansiq-title { font-size: 1.1rem; }
   .tansiq-row { padding: 0.85rem; }
