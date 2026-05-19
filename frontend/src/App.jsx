@@ -87,6 +87,9 @@ const ACCESSORY_KEYWORDS = [
 
 function App() {
   const [query, setQuery] = useState('')
+  const [autocomplete, setAutocomplete] = useState([])
+  const [showAutocomplete, setShowAutocomplete] = useState(false)
+  const autocompleteTimerRef = useRef(null)
   const [allProducts, setAllProducts] = useState([])
   const [searchType, setSearchType] = useState('general')
   const [displayCount, setDisplayCount] = useState(INITIAL_COUNT)
@@ -118,6 +121,7 @@ function App() {
   const chatBodyRef = useRef(null)
 
   const [imageLoading, setImageLoading] = useState(false)
+  const [loadingAI, setLoadingAI] = useState(false)
   const fileInputRef = useRef(null)
 
   // Mode switch (الصفحة الافتراضية = تنسيقات السريع AI)
@@ -153,6 +157,34 @@ function App() {
     }
   }, [chatMessages])
 
+  // 🔍 Autocomplete handler — يُنفّذ مع debounce 120ms من الحرف الثاني
+  const handleQueryChange = (e) => {
+    const v = e.target.value
+    setQuery(v)
+    if (autocompleteTimerRef.current) clearTimeout(autocompleteTimerRef.current)
+    if (v.trim().length < 2) {
+      setAutocomplete([])
+      setShowAutocomplete(false)
+      return
+    }
+    autocompleteTimerRef.current = setTimeout(async () => {
+      try {
+        const r = await axios.get(`${API_URL}/suggest`, { params: { q: v, limit: 8 } })
+        const list = r.data?.suggestions || []
+        setAutocomplete(list)
+        setShowAutocomplete(list.length > 0)
+      } catch { /* silent */ }
+    }, 120)
+  }
+
+  const pickAutocomplete = (phrase) => {
+    setQuery(phrase)
+    setAutocomplete([])
+    setShowAutocomplete(false)
+    // نطلق البحث مباشرة بالعبارة المختارة
+    performSearch(phrase)
+  }
+
   const performSearch = async (searchQuery, skipIntent = false) => {
     if (!searchQuery.trim()) return
     
@@ -169,27 +201,55 @@ function App() {
     setActiveThird(null)
     setDisplayCount(INITIAL_COUNT)
 
-    try {
-      const response = await axios.get(`${API_URL}/search`, {
-        params: { 
-          q: searchQuery, 
-          limit: 500,
-          skipIntent: skipIntent ? 'true' : 'false'
-        }
-      })
+    // 🚀 Lazy Loading: نطلب المنتجات والميزات الذكية بالتوازي
+    setLoadingAI(true)
+
+    // 1) المنتجات + intent (سريع، بدون LLM) — نظهرها فوراً
+    const fastPromise = axios.get(`${API_URL}/search`, {
+      params: { q: searchQuery, limit: 500, skipAI: 'true', skipIntent: skipIntent ? 'true' : 'false' },
+    }).then(response => {
       setAllProducts(response.data.products || [])
       setSearchType(response.data.searchType || 'general')
-      setAiSummary(response.data.aiSummary || null)
-      setIntent(response.data.intent || null)
-      setFilters(response.data.filters || { brands: [], sizes: [], sizesTitle: '', thirdOptions: [], thirdTitle: '' })
-      setRelatedSearches(response.data.relatedSearches || [])
-      setDidYouMean(response.data.didYouMean || null)
-    } catch (err) {
+      setFilters(prev => ({
+        ...prev,
+        brands: response.data.filters?.brands || [],
+      }))
+      // ⚡ intent من القاموس يأتي فوراً مع المنتجات
+      if (response.data.intent && response.data.intent.suggestions?.length > 0) {
+        setIntent(response.data.intent)
+      }
+      setLoading(false)
+    }).catch(err => {
       setError('Search failed: ' + err.message)
       setAllProducts([])
-    } finally {
       setLoading(false)
-    }
+    })
+
+    // 2) ميزات الـ AI (تحمّل في الخلفية وتظهر تباعاً)
+    const aiPromise = axios.get(`${API_URL}/search/ai`, {
+      params: { q: searchQuery, skipIntent: skipIntent ? 'true' : 'false' },
+    }).then(response => {
+      setAiSummary(response.data.aiSummary || null)
+      // intent من LLM يحدّث فقط لو القاموس لم يطابق
+      if (response.data.intent?.suggestions?.length > 0) {
+        setIntent(response.data.intent)
+      }
+      setFilters(prev => ({
+        ...prev,
+        sizes: response.data.filters?.sizes || [],
+        sizesTitle: response.data.filters?.sizesTitle || '',
+        thirdOptions: response.data.filters?.thirdOptions || [],
+        thirdTitle: response.data.filters?.thirdTitle || '',
+      }))
+      setRelatedSearches(response.data.relatedSearches || [])
+      setDidYouMean(response.data.didYouMean || null)
+    }).catch(err => {
+      console.warn('AI enrichment failed:', err.message)
+    }).finally(() => {
+      setLoadingAI(false)
+    })
+
+    await Promise.allSettled([fastPromise, aiPromise])
   }
 
   const handleSearch = (e) => {
@@ -326,10 +386,22 @@ function App() {
         const response = await axios.post(`${API_URL}/image-search`, {
           image: ev.target.result,
         })
-        const extracted = response.data.query
-        if (response.data.success && extracted) {
-          setQuery(extracted)
-          performSearch(extracted, true)
+        if (response.data.success && response.data.visualSearch && response.data.products) {
+          // 📷 بحث بصري — نعرض المنتجات المشابهة مباشرة بدون بحث نصي تالي
+          setAllProducts(response.data.products)
+          setSearchType('visual')
+          setQuery('')  // ⚠️ خانة البحث تبقى فاضية للتأكيد إن البحث بصري وليس نصي
+          setHasSearched(true)
+          setAiSummary(null)
+          setIntent(null)
+          setFilters({ brands: [], sizes: [], sizesTitle: '', thirdOptions: [], thirdTitle: '' })
+          setRelatedSearches([])
+          setDidYouMean(null)
+          setDisplayCount(INITIAL_COUNT)
+        } else if (response.data.success && response.data.query) {
+          // legacy: نص → بحث عادي (لم يعد المسار الافتراضي لكن نحتفظ به للأمان)
+          setQuery(response.data.query)
+          performSearch(response.data.query, true)
         } else {
           setError(response.data.message || 'لم نتمكن من التعرّف على المنتج في الصورة')
         }
@@ -460,6 +532,15 @@ function App() {
           target="_blank"
           rel="noopener noreferrer"
           className="product-card"
+          onClick={() => {
+            // 📊 تتبّع نقرة المنتج للتقارير
+            try {
+              axios.post(`${API_URL}/track/click`, {
+                query, productId: product.id, productTitle: product.title,
+                position: idx + 1, source: 'search',
+              }).catch(() => {})
+            } catch {}
+          }}
         >
           {product.hasDiscount && (
             <div className="discount-badge">-{product.discountPercentage}%</div>
@@ -625,8 +706,29 @@ function App() {
       >
         📄 مشروع تنسيقات السريع AI
       </button>
+      <button
+        className={`mode-switch-btn ${mode === 'dashboard' ? 'active' : ''}`}
+        onClick={() => setMode('dashboard')}
+      >
+        📊 تقرير البحث
+      </button>
     </div>
   )
+
+  if (mode === 'dashboard') {
+    return (
+      <div className="app" dir="rtl">
+        {modeSwitch}
+        <div style={{ background: 'white', borderRadius: '16px', overflow: 'hidden', height: 'calc(100vh - 120px)', margin: '0 1rem', boxShadow: '0 4px 12px rgba(0,0,0,.08)' }}>
+          <iframe
+            src={`${API_URL}/admin/dashboard`}
+            title="تقرير البحث"
+            style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
+          />
+        </div>
+      </div>
+    )
+  }
 
   if (mode === 'tansiq') {
     return (
@@ -677,13 +779,32 @@ function App() {
       </header>
 
       <form className="search-form" onSubmit={handleSearch}>
-        <input
-          type="text"
-          className="search-input"
-          placeholder="ابحث عن منتج..."
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
+        <div className="search-input-wrapper" style={{ position: 'relative', flex: 1 }}>
+          <input
+            type="text"
+            className="search-input"
+            placeholder="ابحث عن منتج..."
+            value={query}
+            onChange={handleQueryChange}
+            onFocus={() => { if (autocomplete.length > 0) setShowAutocomplete(true) }}
+            onBlur={() => { setTimeout(() => setShowAutocomplete(false), 200) }}
+            autoComplete="off"
+          />
+          {showAutocomplete && autocomplete.length > 0 && (
+            <ul className="autocomplete-dropdown" role="listbox">
+              {autocomplete.map((s, i) => (
+                <li
+                  key={i}
+                  role="option"
+                  onMouseDown={(e) => { e.preventDefault(); pickAutocomplete(s) }}
+                >
+                  <span className="ac-icon">🔍</span>
+                  <span className="ac-text">{s}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
         <input
           ref={fileInputRef}
           type="file"
@@ -747,6 +868,14 @@ function App() {
           <div className="loading-progress">
             <div className="loading-progress-bar"></div>
           </div>
+        </div>
+      )}
+
+      {/* 💫 Skeleton للـ intent أثناء التحميل */}
+      {loadingAI && !loading && hasSearched && !intent && (
+        <div className="ai-skeleton intent-skeleton">
+          <div className="ai-skeleton-shimmer"></div>
+          <div className="ai-skeleton-text">💡 جاري تحليل البحث الذكي...</div>
         </div>
       )}
 

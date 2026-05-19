@@ -36,3 +36,10 @@ Thumbs.db
 
 # CSV data
 *.csv
+# Runtime data — should not be deployed
+backend/data/*.jsonl
+backend/data/*.json
+backend/data/sample_tags.json
+backend/data/response-cache.json
+backend/models-cache/
+backend/nodemon.json

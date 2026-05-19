@@ -4,6 +4,7 @@ const path = require('path');
 const { parse } = require('csv-parse');
 const { Client } = require('@elastic/elasticsearch');
 const OpenAI = require('openai');
+const { CohereClient } = require('cohere-ai');
 
 // إعداد العملاء
 const esClient = new Client({
@@ -12,12 +13,23 @@ const esClient = new Client({
 });
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const cohere = process.env.COHERE_API_KEY
+  ? new CohereClient({ token: process.env.COHERE_API_KEY })
+  : null;
+const USE_COHERE = !!cohere;
+const USE_LOCAL_EMBED = process.env.USE_LOCAL_EMBED === 'true';
+const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
+const OLLAMA_EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'bge-m3';
 
-const INDEX_NAME = 'products';
+const INDEX_NAME = process.env.INDEX_NAME || 'products';
 const CSV_FILE = path.join(__dirname, '..', 'data', 'products.csv');
-const MAX_PRODUCTS = 22000; // عدد المنتجات اللي نبي نفهرسها
-const BATCH_SIZE = 100;     // عدد المنتجات في كل دفعة
-const EMBEDDING_BATCH = 100; // عدد النصوص في كل طلب OpenAI
+const MAX_PRODUCTS = 22000;
+const BATCH_SIZE = USE_LOCAL_EMBED ? 32 : 96;
+const EMBEDDING_BATCH = BATCH_SIZE;
+
+const PROVIDER = USE_LOCAL_EMBED ? `Ollama/${OLLAMA_EMBED_MODEL} (1024-d)`
+  : USE_COHERE ? 'Cohere (1024-d)' : 'OpenAI (1536-d)';
+console.log(`📁 Target index: ${INDEX_NAME} | Embedding: ${PROVIDER}`);
 
 // قراءة ملف CSV
 function readCSV() {
@@ -45,8 +57,36 @@ function readCSV() {
   });
 }
 
-// توليد embeddings من OpenAI (دفعة من النصوص)
+// توليد embedding واحد عبر Ollama
+async function ollamaEmbed(text) {
+  const res = await fetch(`${OLLAMA_URL}/api/embeddings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: OLLAMA_EMBED_MODEL, prompt: text }),
+  });
+  if (!res.ok) throw new Error(`Ollama embed: HTTP ${res.status}`);
+  const data = await res.json();
+  return data.embedding;
+}
+
+// توليد embeddings — dispatch بين Ollama / Cohere / OpenAI
 async function generateEmbeddings(texts) {
+  if (USE_LOCAL_EMBED) {
+    // Ollama لا يدعم batch endpoint، نسلسل النصوص
+    const results = [];
+    for (const t of texts) {
+      results.push(await ollamaEmbed(t));
+    }
+    return results;
+  }
+  if (USE_COHERE) {
+    const response = await cohere.embed({
+      texts,
+      model: 'embed-multilingual-v3.0',
+      inputType: 'search_document',
+    });
+    return response.embeddings;
+  }
   const response = await openai.embeddings.create({
     model: 'text-embedding-3-small',
     input: texts,

@@ -8,7 +8,13 @@ const esClient = new Client({
   },
 });
 
-const INDEX_NAME = 'products';
+const INDEX_NAME = process.env.INDEX_NAME || 'products';
+const USE_COHERE = !!process.env.COHERE_API_KEY;
+const USE_LOCAL_EMBED = process.env.USE_LOCAL_EMBED === 'true';
+// BGE-M3 و Cohere v3 كلاهما 1024-d. OpenAI 1536-d
+const EMBEDDING_DIMS = (USE_LOCAL_EMBED || USE_COHERE) ? 1024 : 1536;
+const PROVIDER = USE_LOCAL_EMBED ? 'Ollama BGE-M3' : USE_COHERE ? 'Cohere' : 'OpenAI';
+console.log(`📁 Target index: ${INDEX_NAME} | Embedding: ${PROVIDER} (${EMBEDDING_DIMS}-d)`);
 
 async function createIndex() {
   try {
@@ -39,7 +45,7 @@ async function createIndex() {
           size: { type: 'keyword' },
           embedding: {
             type: 'dense_vector',
-            dims: 1536,
+            dims: EMBEDDING_DIMS,
             index: true,
             similarity: 'cosine'
           }
@@ -54,7 +60,7 @@ async function createIndex() {
     console.log(`   - price (السعر)`);
     console.log(`   - brand (العلامة التجارية)`);
     console.log(`   - link (رابط المنتج)`);
-    console.log(`   - embedding (1536 dimension vector)`);
+    console.log(`   - embedding (${EMBEDDING_DIMS} dimension vector)`);
 
   } catch (error) {
     console.error('❌ خطأ:', error.message);

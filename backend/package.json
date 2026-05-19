@@ -14,8 +14,11 @@
   "dependencies": {
     "@elastic/elasticsearch": "^9.4.0",
     "@google/genai": "^2.2.0",
+    "@xenova/transformers": "^2.17.2",
+    "cohere-ai": "^8.0.0",
     "cors": "^2.8.6",
     "csv-parse": "^6.2.1",
+    "csv-stringify": "^6.7.0",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "openai": "^6.37.0"
