@@ -668,3 +668,75 @@ body {
     height: 150px;
   }
 }
+
+/* 🔧 صفحة الصيانة (تظهر عند VITE_MAINTENANCE_MODE=true) */
+.maintenance-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+.maintenance-card {
+  background: white;
+  border-radius: 24px;
+  padding: 56px 40px;
+  max-width: 560px;
+  width: 100%;
+  text-align: center;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+}
+.maintenance-icon {
+  font-size: 5rem;
+  margin-bottom: 16px;
+  animation: maint-float 3s ease-in-out infinite;
+}
+@keyframes maint-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+.maintenance-card h1 {
+  font-size: 2rem;
+  color: #5a4fcf;
+  margin-bottom: 8px;
+  font-weight: 700;
+}
+.maintenance-subtitle {
+  color: #999;
+  font-size: 1rem;
+  margin-bottom: 28px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+}
+.maintenance-text {
+  color: #555;
+  font-size: 1.05rem;
+  line-height: 1.8;
+  margin-bottom: 32px;
+}
+.maintenance-features {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  margin-bottom: 32px;
+}
+.maintenance-features .feat {
+  background: linear-gradient(135deg, #f5f7fa, #e8ecf3);
+  padding: 14px 16px;
+  border-radius: 14px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #5a4fcf;
+}
+.maintenance-footer {
+  color: #999;
+  font-size: 0.9rem;
+  font-style: italic;
+}
+@media (max-width: 480px) {
+  .maintenance-card { padding: 40px 24px; }
+  .maintenance-icon { font-size: 4rem; }
+  .maintenance-card h1 { font-size: 1.5rem; }
+  .maintenance-features { grid-template-columns: 1fr; }
+}
