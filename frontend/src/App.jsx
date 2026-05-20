@@ -352,6 +352,11 @@ function App() {
       setPageTansiqComposedImage(res.data.imageUrl)
       setPageTansiqComposedModel(res.data.model || null)
       setPageTansiqComposeDuration(Date.now() - t0)
+      // 📊 fire-and-forget analytics
+      axios.post(`${API_URL}/track/tansiq`, {
+        products: all.map(p => ({ id: p.mpn || p.id, title: p.title, link: p.link })),
+        query: 'page-tansiq',
+      }).catch(() => {})
     } catch (err) {
       setPageTansiqError('فشل توليد الصورة: ' + (err.response?.data?.message || err.message))
       setPageTansiqComposeDuration(Date.now() - t0)
@@ -408,6 +413,11 @@ function App() {
       setTansiqComposedImage(res.data.imageUrl)
       setTansiqComposedModel(res.data.model || null)
       setTansiqComposeDuration(Date.now() - t0)
+      // 📊 fire-and-forget analytics
+      axios.post(`${API_URL}/track/tansiq`, {
+        products: tansiqSelected.map(p => ({ id: p.mpn || p.id, title: p.title, link: p.link })),
+        query: 'multi-row-tansiq',
+      }).catch(() => {})
     } catch (err) {
       setTansiqError('فشل توليد الصورة: ' + (err.response?.data?.message || err.message))
       setTansiqComposeDuration(Date.now() - t0)
