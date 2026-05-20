@@ -2758,6 +2758,7 @@ body {
   border-left-color: #facc15;
   animation: dev-pulse 1.5s ease-in-out infinite;
 }
+.dev-stage.stage-failed { border-left-color: #ef4444; }
 .dev-stage.stage-idle { opacity: 0.65; }
 @keyframes dev-pulse {
   0%, 100% { background: #1e293b; }

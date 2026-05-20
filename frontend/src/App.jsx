@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import axios from 'axios'
 import './App.css'
 import DeveloperMode from './DeveloperMode.jsx'
+import TansiqDevMode from './TansiqDevMode.jsx'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 
@@ -128,6 +129,10 @@ function App() {
 
   // 🔧 Developer Mode — tracks live pipeline data for the most recent search
   const [devInfo, setDevInfo] = useState(null)
+
+  // 🔧 Tansiq compose timing
+  const [tansiqComposeDuration, setTansiqComposeDuration] = useState(null)
+  const [pageTansiqComposeDuration, setPageTansiqComposeDuration] = useState(null)
 
   // Mode switch (الصفحة الافتراضية = تنسيقات السريع AI)
   const [mode, setMode] = useState('page-tansiq') // 'search' | 'tansiq' | 'page-tansiq'
@@ -330,12 +335,16 @@ function App() {
     setPageTansiqError('')
     setPageTansiqComposedImage(null)
     setPageTansiqComposedModel(null)
+    setPageTansiqComposeDuration(null)
+    const t0 = Date.now()
     try {
       const res = await axios.post(`${API_URL}/tansiq-compose`, { products: all })
       setPageTansiqComposedImage(res.data.imageUrl)
       setPageTansiqComposedModel(res.data.model || null)
+      setPageTansiqComposeDuration(Date.now() - t0)
     } catch (err) {
       setPageTansiqError('فشل توليد الصورة: ' + (err.response?.data?.message || err.message))
+      setPageTansiqComposeDuration(Date.now() - t0)
     } finally {
       setPageTansiqComposing(false)
     }
@@ -380,14 +389,18 @@ function App() {
     setTansiqError('')
     setTansiqComposedImage(null)
     setTansiqComposedModel(null)
+    setTansiqComposeDuration(null)
+    const t0 = Date.now()
     try {
       const res = await axios.post(`${API_URL}/tansiq-compose`, {
         products: tansiqSelected,
       })
       setTansiqComposedImage(res.data.imageUrl)
       setTansiqComposedModel(res.data.model || null)
+      setTansiqComposeDuration(Date.now() - t0)
     } catch (err) {
       setTansiqError('فشل توليد الصورة: ' + (err.response?.data?.message || err.message))
+      setTansiqComposeDuration(Date.now() - t0)
     } finally {
       setTansiqComposing(false)
     }
@@ -762,6 +775,17 @@ function App() {
     return (
       <TansiqProject
         modeSwitch={modeSwitch}
+        devMode={
+          <TansiqDevMode
+            apiUrl={API_URL}
+            selectedCount={tansiqSelected.length}
+            composing={tansiqComposing}
+            composedImage={tansiqComposedImage}
+            composedModel={tansiqComposedModel}
+            composeDuration={tansiqComposeDuration}
+            flowName="Multi-row Tansiq"
+          />
+        }
         rows={tansiqRows}
         selected={tansiqSelected}
         composing={tansiqComposing}
@@ -781,6 +805,17 @@ function App() {
     return (
       <PageTansiqProject
         modeSwitch={modeSwitch}
+        devMode={
+          <TansiqDevMode
+            apiUrl={API_URL}
+            selectedCount={pageTansiqSelected.length + 1}
+            composing={pageTansiqComposing}
+            composedImage={pageTansiqComposedImage}
+            composedModel={pageTansiqComposedModel}
+            composeDuration={pageTansiqComposeDuration}
+            flowName="Product Page Tansiq (locked product + extras)"
+          />
+        }
         lockedProduct={LOCKED_PRODUCT}
         rows={pageTansiqRows}
         expanded={pageTansiqExpanded}
@@ -972,112 +1007,12 @@ function App() {
         </div>
       )}
 
-      <button
-        className={`chat-fab ${chatOpen ? 'chat-fab-active' : ''}`}
-        onClick={() => setChatOpen(!chatOpen)}
-        aria-label="AI Assistant"
-      >
-        {chatOpen ? '✕' : '🤖'}
-        {!chatOpen && <span className="chat-fab-badge">AI</span>}
-      </button>
-
-      {chatOpen && (
-        <div className="chat-window">
-          <div className="chat-header">
-            <div className="chat-header-info">
-              <div className="chat-avatar">🤖</div>
-              <div>
-                <div className="chat-title">المساعد الذكي</div>
-                <div className="chat-status">● متصل الآن</div>
-              </div>
-            </div>
-            <button className="chat-close" onClick={() => setChatOpen(false)}>✕</button>
-          </div>
-
-          <div className="chat-body" ref={chatBodyRef}>
-            {chatMessages.map((msg, idx) => (
-              <div key={idx} className={`chat-message chat-${msg.role}`}>
-                {msg.role === 'assistant' ? (
-                  <div className="chat-bubble chat-bubble-assistant">
-                    <p>{typeof msg.content === 'string' ? msg.content : msg.content.reply}</p>
-                    {msg.content.suggestedProduct && (
-                      <a 
-                        href={msg.content.suggestedProduct.link}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="chat-product-card"
-                      >
-                        <img src={msg.content.suggestedProduct.image_link} alt="" />
-                        <div className="chat-product-info">
-                          <div className="chat-product-title">{msg.content.suggestedProduct.title}</div>
-                          <div className="chat-product-prices">
-                            <span className="chat-product-price">{msg.content.suggestedProduct.price}</span>
-                            {msg.content.suggestedProduct.hasDiscount && (
-                              <>
-                                <span className="chat-product-original">{msg.content.suggestedProduct.originalPrice}</span>
-                                <span className="chat-product-discount">-{msg.content.suggestedProduct.discountPercentage}%</span>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      </a>
-                    )}
-                    {msg.content.quickReplies && msg.content.quickReplies.length > 0 && (
-                      <div className="chat-quick-replies">
-                        {msg.content.quickReplies.map((reply, qIdx) => (
-                          <button
-                            key={qIdx}
-                            className="chat-quick-reply"
-                            onClick={() => handleQuickReply(reply)}
-                            disabled={chatLoading}
-                          >
-                            {reply}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="chat-bubble chat-bubble-user">
-                    <p>{msg.content}</p>
-                  </div>
-                )}
-              </div>
-            ))}
-            {chatLoading && (
-              <div className="chat-message chat-assistant">
-                <div className="chat-bubble chat-bubble-assistant chat-typing">
-                  <span></span><span></span><span></span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <form className="chat-input-form" onSubmit={handleChatSubmit}>
-            <input
-              type="text"
-              className="chat-input"
-              placeholder="اكتب سؤالك..."
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              disabled={chatLoading}
-            />
-            <button 
-              type="submit" 
-              className="chat-send"
-              disabled={chatLoading || !chatInput.trim()}
-            >
-              ↑
-            </button>
-          </form>
-        </div>
-      )}
     </div>
   )
 }
 
 function TansiqProject({
-  modeSwitch, rows, selected, composing, composedImage, composedModel, error,
+  modeSwitch, devMode, rows, selected, composing, composedImage, composedModel, error,
   onRowSearch, onRowQueryChange, onDrop, onRemove, onCompose,
 }) {
   const [dragOver, setDragOver] = useState(false)
@@ -1126,6 +1061,7 @@ function TansiqProject({
   return (
     <div className="app tansiq-page" dir="rtl">
       {modeSwitch}
+      {devMode}
       <header className="tansiq-header">
         <h1 className="tansiq-title">🎨 مشروع التنسيقات المتقدم AI</h1>
         <p className="tansiq-subtitle">ابحث في كل صف، اسحب 3 منتجات إلى الصندوق، ثم اطلب التصميم</p>
@@ -1363,7 +1299,7 @@ function TansiqRow({ row, defaultPlaceholder, onSearch, onQueryChange, onDragSta
 }
 
 function PageTansiqProject({
-  modeSwitch, lockedProduct, rows, expanded, selected, composing, composedImage, composedModel, error,
+  modeSwitch, devMode, lockedProduct, rows, expanded, selected, composing, composedImage, composedModel, error,
   onToggleExpand, onFetchRow, onSelectColor, onDrop, onRemove, onCompose,
 }) {
   const [dragOver, setDragOver] = useState(false)
@@ -1410,6 +1346,7 @@ function PageTansiqProject({
   return (
     <div className="app product-page-app" dir="rtl">
       {modeSwitch}
+      {devMode}
 
       <div className="product-page-shell">
         {/* breadcrumb */}
