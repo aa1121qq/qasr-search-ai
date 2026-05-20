@@ -309,6 +309,17 @@ body {
   cursor: pointer;
   transition: all 0.25s ease;
 }
+.mode-switch-btn-locked {
+  color: #c7c7c7 !important;
+  opacity: 0.55;
+  cursor: not-allowed !important;
+  font-weight: 500;
+  pointer-events: none;
+}
+.mode-switch-btn-locked:hover {
+  background: transparent !important;
+  transform: none !important;
+}
 
 .mode-switch-btn:hover:not(.active) { color: #333; background: #f5f7fa; }
 

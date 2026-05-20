@@ -746,10 +746,11 @@ function App() {
         🔍 مشروع البحث AI
       </button>
       <button
-        className={`mode-switch-btn ${mode === 'tansiq' ? 'active' : ''}`}
-        onClick={() => setMode('tansiq')}
+        className="mode-switch-btn mode-switch-btn-locked"
+        disabled
+        title="غير متاح حالياً"
       >
-        🎨 مشروع التنسيقات المتقدم AI
+        🔒 🎨 مشروع التنسيقات المتقدم AI
       </button>
       <button
         className={`mode-switch-btn ${mode === 'page-tansiq' ? 'active' : ''}`}
