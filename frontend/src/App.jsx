@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import axios from 'axios'
 import './App.css'
+import DeveloperMode from './DeveloperMode.jsx'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 
@@ -83,6 +84,7 @@ const ACCESSORY_KEYWORDS = [
   'وعاء', 'سلة', 'غطاء', 'كيس', 'فلتر', 'ملحق', 'قطعة غيار',
   'حشوة', 'مخلب', 'ملعقة', 'مقشطة', 'فرشاة', 'سن', 'شفرة',
   'ورق', 'بطانة', 'حامل', 'سدادة', 'صينية', 'رف داخلي',
+  'يدوي', 'يدوية', 'يدويه',
 ]
 
 function App() {
@@ -123,6 +125,9 @@ function App() {
   const [imageLoading, setImageLoading] = useState(false)
   const [loadingAI, setLoadingAI] = useState(false)
   const fileInputRef = useRef(null)
+
+  // 🔧 Developer Mode — tracks live pipeline data for the most recent search
+  const [devInfo, setDevInfo] = useState(null)
 
   // Mode switch (الصفحة الافتراضية = تنسيقات السريع AI)
   const [mode, setMode] = useState('page-tansiq') // 'search' | 'tansiq' | 'page-tansiq'
@@ -204,10 +209,16 @@ function App() {
     // 🚀 Lazy Loading: نطلب المنتجات والميزات الذكية بالتوازي
     setLoadingAI(true)
 
+    // 🔧 reset dev info for this search
+    setDevInfo({ query: searchQuery, searchType: null, productsCount: 0, brandsCount: 0, smartFiltersCount: 0, relatedCount: 0, didYouMean: null, intentAmbiguous: false, fastDuration: null, aiDuration: null })
+    const tFastStart = Date.now()
+    const tAiStart = Date.now()
+
     // 1) المنتجات + intent (سريع، بدون LLM) — نظهرها فوراً
     const fastPromise = axios.get(`${API_URL}/search`, {
       params: { q: searchQuery, limit: 500, skipAI: 'true', skipIntent: skipIntent ? 'true' : 'false' },
     }).then(response => {
+      const fastDuration = Date.now() - tFastStart
       setAllProducts(response.data.products || [])
       setSearchType(response.data.searchType || 'general')
       setFilters(prev => ({
@@ -218,6 +229,14 @@ function App() {
       if (response.data.intent && response.data.intent.suggestions?.length > 0) {
         setIntent(response.data.intent)
       }
+      setDevInfo(prev => ({
+        ...prev,
+        searchType: response.data.searchType || 'general',
+        productsCount: (response.data.products || []).length,
+        brandsCount: (response.data.filters?.brands || []).length,
+        intentAmbiguous: !!response.data.intent?.isAmbiguous,
+        fastDuration,
+      }))
       setLoading(false)
     }).catch(err => {
       setError('Search failed: ' + err.message)
@@ -229,20 +248,29 @@ function App() {
     const aiPromise = axios.get(`${API_URL}/search/ai`, {
       params: { q: searchQuery, skipIntent: skipIntent ? 'true' : 'false' },
     }).then(response => {
+      const aiDuration = Date.now() - tAiStart
       setAiSummary(response.data.aiSummary || null)
       // intent من LLM يحدّث فقط لو القاموس لم يطابق
       if (response.data.intent?.suggestions?.length > 0) {
         setIntent(response.data.intent)
       }
-      setFilters(prev => ({
-        ...prev,
+      const aiFilters = {
         sizes: response.data.filters?.sizes || [],
         sizesTitle: response.data.filters?.sizesTitle || '',
         thirdOptions: response.data.filters?.thirdOptions || [],
         thirdTitle: response.data.filters?.thirdTitle || '',
-      }))
+      }
+      setFilters(prev => ({ ...prev, ...aiFilters }))
       setRelatedSearches(response.data.relatedSearches || [])
       setDidYouMean(response.data.didYouMean || null)
+      setDevInfo(prev => ({
+        ...prev,
+        smartFiltersCount: aiFilters.sizes.length + aiFilters.thirdOptions.length,
+        relatedCount: (response.data.relatedSearches || []).length,
+        didYouMean: response.data.didYouMean || null,
+        intentAmbiguous: prev?.intentAmbiguous || !!response.data.intent?.isAmbiguous,
+        aiDuration,
+      }))
     }).catch(err => {
       console.warn('AI enrichment failed:', err.message)
     }).finally(() => {
@@ -774,6 +802,7 @@ function App() {
   return (
     <div className="app" dir="rtl">
       {modeSwitch}
+      <DeveloperMode devInfo={devInfo} loading={loading} loadingAI={loadingAI} apiUrl={API_URL} />
       <header className="header">
         <h1>QasrAlawani Search AI</h1>
       </header>
