@@ -152,8 +152,8 @@ function App() {
   // مشروع تنسيقات صفحة المنتج state
   const [pageTansiqExpanded, setPageTansiqExpanded] = useState(false)
   const [pageTansiqRows, setPageTansiqRows] = useState([
-    { id: 1, label: 'بيالات وفناجين', query: 'بيالات فناجين', allProducts: [], selectedColor: null, loading: false, hasFetched: false, error: '' },
-    { id: 2, label: 'طوفرية', query: 'طوفرية', allProducts: [], selectedColor: null, loading: false, hasFetched: false, error: '' },
+    { id: 1, label: 'بيالات وفناجين', queries: ['بيالات', 'فناجيل'], allProducts: [], selectedColor: null, loading: false, hasFetched: false, error: '' },
+    { id: 2, label: 'طوفرية', queries: ['طوفرية'], allProducts: [], selectedColor: null, loading: false, hasFetched: false, error: '' },
   ])
   const [pageTansiqSelected, setPageTansiqSelected] = useState([])
   const [pageTansiqComposing, setPageTansiqComposing] = useState(false)
@@ -293,13 +293,23 @@ function App() {
   const fetchPageTansiqRow = async (rowId) => {
     const row = pageTansiqRows.find(r => r.id === rowId)
     if (!row) return
+    const queries = row.queries && row.queries.length > 0 ? row.queries : [row.query]
     setPageTansiqRows(prev => prev.map(r => r.id === rowId ? { ...r, loading: true, error: '' } : r))
     try {
-      const res = await axios.get(`${API_URL}/search`, {
-        params: { q: row.query, limit: 30, skipIntent: 'true' },
-      })
+      const results = await Promise.all(
+        queries.map(q => axios.get(`${API_URL}/search`, { params: { q, limit: 30, skipIntent: 'true' } }))
+      )
+      // 🔀 merge + dedupe by link / mpn / title
+      const seen = new Set()
+      const merged = []
+      for (const res of results) {
+        for (const p of (res.data.products || [])) {
+          const key = p.link || p.mpn || p.title
+          if (key && !seen.has(key)) { seen.add(key); merged.push(p) }
+        }
+      }
       setPageTansiqRows(prev => prev.map(r => r.id === rowId
-        ? { ...r, allProducts: res.data.products || [], loading: false, hasFetched: true }
+        ? { ...r, allProducts: merged, loading: false, hasFetched: true }
         : r))
     } catch (err) {
       setPageTansiqRows(prev => prev.map(r => r.id === rowId
@@ -1598,29 +1608,37 @@ function PageTansiqRow({ row, thermosColor, onFetch, onSelectColor, onDragStart,
 
       {filteredProducts.length > 0 && (
         <div className="page-tansiq-row-products">
-          {filteredProducts.slice(0, 12).map((p, i) => (
+          {filteredProducts.map((p, i) => (
             <div
               key={i}
               className="page-tansiq-mini-card"
               draggable
               onDragStart={(e) => onDragStart(e, p)}
-              title="اسحب إلى صندوق التنسيق"
+              title="اسحب إلى صندوق التنسيق أو اضغط +"
             >
               <button
                 type="button"
-                className="mobile-select-btn"
+                className="page-tansiq-select-btn"
                 onClick={(e) => {
                   e.stopPropagation()
                   e.preventDefault()
                   onMobileSelect(p, e)
                 }}
                 aria-label="إضافة للتنسيق"
+                title="إضافة للتنسيق"
               >+</button>
               <img src={p.image_link} alt={p.title} />
               <div className="page-tansiq-mini-title">{p.title}</div>
               <div className="page-tansiq-mini-meta">
                 <span className="page-tansiq-mini-price">{p.price} ر.س</span>
                 {p.color && <span className="page-tansiq-mini-color">{p.color}</span>}
+              </div>
+
+              {/* 🔍 Hover popup — enlarged image + name */}
+              <div className="page-tansiq-hover-popup">
+                <img src={p.image_link} alt={p.title} />
+                <div className="page-tansiq-hover-title">{p.title}</div>
+                {p.color && <div className="page-tansiq-hover-meta">{p.color}{p.size ? ` · ${p.size}` : ''}</div>}
               </div>
             </div>
           ))}
