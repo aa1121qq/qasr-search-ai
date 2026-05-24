@@ -77,8 +77,9 @@ export default function DeveloperMode({ devInfo, loading, loadingAI, apiUrl }) {
                     {hasData && <span className="dev-stage-info">type: <code>{queryType}</code></span>}
                   </div>
                   <div className="dev-stage-desc">
-                    Regex match against device-words list (fast path). Falls back to GPT-4o-mini JSON-mode if no match.
-                    Output: <code>general</code> | <code>device</code>. Drives accessory exclusion + brand boost.
+                    Regex match against device-words list (fast path). Falls back to GPT-4.1-nano JSON-mode if no match.
+                    Output: <code>general</code> | <code>device</code> | <code>kitchenware</code>. Drives accessory
+                    exclusion + brand boost.
                   </div>
                 </li>
 
@@ -93,19 +94,23 @@ export default function DeveloperMode({ devInfo, loading, loadingAI, apiUrl }) {
                     )}
                   </div>
                   <div className="dev-stage-desc">
-                    Catalog-anchored fuzzy matching. Compares query tokens against the 2,676-word product vocabulary.
-                    Triggers only when no exact catalog match.
+                    Catalog-anchored fuzzy matching against 2,676-word vocab. Levenshtein distance with edge-character
+                    penalty: <code>+0.5</code> if first letter differs, <code>+0.3</code> if last letter differs (e.g.
+                    "غسلة" → "غسّالة" not "سلة"). Skipped entirely when the original query already returns 5+ results,
+                    preventing false positives like "غسالة → غلاية".
                   </div>
                 </li>
 
                 <li className={`dev-stage stage-${stageStatus(hasData)}`}>
                   <div className="dev-stage-head">
                     <span className="dev-stage-num">3</span>
-                    <span className="dev-stage-name">Query Embedding</span>
+                    <span className="dev-stage-name">Subject Extraction + Embedding</span>
                     <span className="dev-stage-info">1024-d · Ollama local</span>
                   </div>
                   <div className="dev-stage-desc">
-                    Model: <code>bge-m3</code> via Ollama on the same VPS. Free (no API cost), &lt;100ms per query.
+                    Strips modifiers (colors, materials, generic device words, numbers + units) before embedding:
+                    "خلاط احمر" → embeds as <code>خلاط</code>, "ماكينة قهوة" → <code>قهوة</code>. Prevents modifiers
+                    from dominating the BGE-M3 vector. Model: <code>bge-m3</code> via Ollama (free, &lt;100ms).
                   </div>
                 </li>
 
@@ -125,11 +130,13 @@ export default function DeveloperMode({ devInfo, loading, loadingAI, apiUrl }) {
                   <div className="dev-stage-head">
                     <span className="dev-stage-num">5</span>
                     <span className="dev-stage-name">CLIP Visual Re-rank</span>
-                    <span className="dev-stage-info">text → image</span>
+                    <span className="dev-stage-info">dual: full + focused</span>
                   </div>
                   <div className="dev-stage-desc">
-                    Encodes the Arabic query to CLIP text embedding (512-d), boosts products whose image embedding is
-                    visually close. Catches "looks like" matches a text-only search misses.
+                    Translates the cleaned subject to English, encodes via CLIP text encoder (512-d), then runs a
+                    dual kNN against both <code>clip_image_embedding</code> (full product image) and
+                    <code> clip_image_embedding_focused</code> (center-crop blend). ES takes the higher match —
+                    works whether the catalog image is studio or lifestyle.
                   </div>
                 </li>
 
@@ -147,16 +154,20 @@ export default function DeveloperMode({ devInfo, loading, loadingAI, apiUrl }) {
                 <li className={`dev-stage stage-${stageStatus(hasData)}`}>
                   <div className="dev-stage-head">
                     <span className="dev-stage-num">7</span>
-                    <span className="dev-stage-name">Accessory + Subject Filters</span>
+                    <span className="dev-stage-name">Smart Accessory + Subject Scoring</span>
                     {hasData && (
                       <span className="dev-stage-info">
-                        {queryType === 'device' ? 'device mode ON' : 'subject only'}
+                        {queryType === 'device' ? 'device mode ON' : 'subject scoring'}
                       </span>
                     )}
                   </div>
                   <div className="dev-stage-desc">
-                    Device queries: drop titles starting with accessory keywords (وعاء, غطاء, يدوي, …).
-                    Subject filter: stems Arabic suffixes (ات, ين, ون, ها, ية, ة, ه) and requires title match.
+                    <strong>Intent-aware accessory filter:</strong> drops titles starting with accessory keywords
+                    (وعاء, غطاء, شنطة, يدوي …) — UNLESS the query itself contains that keyword (e.g. "شنطة ترامس"
+                    keeps thermos bags, "ترامس" excludes them).
+                    <strong> Subject scoring (0-1):</strong> each product scored by what fraction of subject words
+                    appear in its title. Perfect matches (1.0) come first; partial matches fill in when there aren't
+                    enough perfect ones — never returns zero when relevant products exist.
                   </div>
                 </li>
 
@@ -193,8 +204,9 @@ export default function DeveloperMode({ devInfo, loading, loadingAI, apiUrl }) {
                     )}
                   </div>
                   <div className="dev-stage-desc">
-                    Four GPT-4o-mini calls in parallel: AI summary, intent (LLM fallback), smart filters, related searches.
-                    Cached on disk + memory.
+                    Four GPT-4.1-nano calls in parallel: AI summary, intent (LLM fallback), smart filters, related
+                    searches. Cached on disk + memory (24h TTL). nano costs $0.10/1M input + $0.40/1M output —
+                    33% cheaper than gpt-4o-mini.
                   </div>
                 </li>
               </ol>
@@ -288,8 +300,9 @@ Response:
                     <li>Ollama + BGE-M3 — local text embeddings (1024-d)</li>
                     <li>@xenova/transformers — CLIP (text + image, 512-d)</li>
                     <li>@xenova/transformers — BGE-Reranker (cross-encoder)</li>
-                    <li>OpenAI GPT-4o-mini — intent · filters · summaries · chat</li>
+                    <li>OpenAI GPT-4.1-nano — intent · filters · summaries · chat</li>
                     <li>Google Gemini Nano Banana 2 — composition image gen</li>
+                    <li>Sharp — center-crop image processing for focused embeddings</li>
                     <li>dotenv · cors · axios · @google/genai · openai · multer</li>
                   </ul>
                 </div>
@@ -325,23 +338,34 @@ Response:
                 </thead>
                 <tbody>
                   <tr><td>Text embedding (query + index)</td><td><code>bge-m3</code> · 1024-d</td><td>Ollama (self-host)</td></tr>
-                  <tr><td>Image embedding</td><td><code>CLIP ViT-B/32</code> · 512-d</td><td>transformers.js</td></tr>
+                  <tr><td>Image embedding (full)</td><td><code>CLIP ViT-B/32</code> · 512-d</td><td>transformers.js</td></tr>
+                  <tr><td>Image embedding (focused)</td><td><code>CLIP ViT-B/32</code> · 512-d, center-crop 60%</td><td>transformers.js + sharp</td></tr>
                   <tr><td>Text→Image search</td><td><code>CLIP text encoder</code></td><td>transformers.js</td></tr>
                   <tr><td>Re-ranking top 15</td><td><code>bge-reranker-base</code></td><td>transformers.js</td></tr>
-                  <tr><td>Intent · filters · summary · chat</td><td><code>gpt-4o-mini</code></td><td>OpenAI</td></tr>
-                  <tr><td>Composition image gen</td><td><code>gemini-3.1-flash-image-preview</code></td><td>Google</td></tr>
+                  <tr><td>Intent · filters · summary · chat</td><td><code>gpt-4.1-nano</code></td><td>OpenAI</td></tr>
+                  <tr><td>Composition image gen</td><td><code>gemini-3.1-flash-image-preview</code></td><td>Google (Nano Banana 2)</td></tr>
                 </tbody>
               </table>
 
-              <div className="dev-section-title" style={{ marginTop: '1rem' }}>Key Constants</div>
+              <div className="dev-section-title" style={{ marginTop: '1rem' }}>Key Constants & Algorithms</div>
               <pre className="dev-code">{`MAX_PRODUCTS              = 22000
 EMBEDDING_DIM             = 1024 (BGE-M3) · 512 (CLIP)
 kNN_LIMIT                 = 500 (fetched) → top 30 (displayed)
 RERANK_TOP                = 15
-ACCESSORY_KEYWORDS        = [وعاء, سلة, غطاء, ..., يدوي, يدوية]
+TYPO_SKIP_THRESHOLD       = 5  // skip typo correction if original ≥ 5 results
+TYPO_EDGE_PENALTY         = first-char +0.5 · last-char +0.3
+SUBJECT_MATCH_STRATEGY    = score 0-1; perfect (1.0) preferred, partial fills
+
+ACCESSORY_KEYWORDS        = [وعاء, سلة, غطاء, شنطة, يدوي, …]
+  └─ intent-aware: skipped when query itself contains the keyword
 GENERIC_DEVICE_WORDS      = [ماكينة, آلة, جهاز, صانعة]  // stripped from subject
-SPECIFIC_DEVICE_NAMES     = [ثلاجة, غسالة, فرن, ..., عصارة, مطحنة]  // kept
-INTENT_DICTIONARY         = pre-built; LLM is fallback only`}</pre>
+SPECIFIC_DEVICE_NAMES     = [ثلاجة, غسالة, فرن, عصارة, مطحنة, …]  // kept
+SUBJECT_MODIFIERS         = colors + materials + size adjectives  // stripped before embedding
+INTENT_DICTIONARY         = pre-built; LLM is fallback only
+
+IMAGE_SEARCH_BLEND        = 0.35 * full + 0.65 * focused (L2-normalized)
+CACHE_TTL                 = 24h response · in-memory LRU 5000 entries
+CADDY_TIMEOUT             = 300s (for Nano Banana image generation)`}</pre>
             </div>
           )}
 
