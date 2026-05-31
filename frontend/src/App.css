@@ -3084,6 +3084,149 @@ body {
 }
 
 /* ============================== */
+/* 🎯 IMAGE CROPPER OVERLAY        */
+/* ============================== */
+.cropper-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.85);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  animation: fadeIn 0.2s ease;
+}
+@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+
+.cropper-modal {
+  background: white;
+  border-radius: 16px;
+  max-width: 720px;
+  width: 100%;
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.4);
+}
+
+.cropper-header {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid #e5e7eb;
+  text-align: center;
+}
+.cropper-header h3 {
+  margin: 0 0 0.3rem;
+  font-size: 1.1rem;
+  color: #1f2937;
+}
+.cropper-header p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #6b7280;
+}
+
+.cropper-image-wrap {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  background: #0f172a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  max-height: 65vh;
+}
+.cropper-image-wrap img {
+  max-width: 100%;
+  max-height: 65vh;
+  user-select: none;
+  pointer-events: none;
+  display: block;
+}
+
+.cropper-shade {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
+.cropper-box {
+  position: absolute;
+  border: 2.5px solid #a855f7;
+  box-shadow: 0 0 0 1px rgba(168, 85, 247, 0.3) inset;
+  cursor: move;
+  touch-action: none;
+}
+.cropper-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, transparent calc(33.33% - 0.5px), rgba(255,255,255,0.35) calc(33.33% - 0.5px), rgba(255,255,255,0.35) calc(33.33% + 0.5px), transparent calc(33.33% + 0.5px)),
+    linear-gradient(to right, transparent calc(66.66% - 0.5px), rgba(255,255,255,0.35) calc(66.66% - 0.5px), rgba(255,255,255,0.35) calc(66.66% + 0.5px), transparent calc(66.66% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(33.33% - 0.5px), rgba(255,255,255,0.35) calc(33.33% - 0.5px), rgba(255,255,255,0.35) calc(33.33% + 0.5px), transparent calc(33.33% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(66.66% - 0.5px), rgba(255,255,255,0.35) calc(66.66% - 0.5px), rgba(255,255,255,0.35) calc(66.66% + 0.5px), transparent calc(66.66% + 0.5px));
+  pointer-events: none;
+}
+
+.cropper-handle {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  background: white;
+  border: 2.5px solid #a855f7;
+  border-radius: 50%;
+  touch-action: none;
+}
+.cropper-handle.nw { top: -10px; left: -10px; cursor: nwse-resize; }
+.cropper-handle.ne { top: -10px; right: -10px; cursor: nesw-resize; }
+.cropper-handle.sw { bottom: -10px; left: -10px; cursor: nesw-resize; }
+.cropper-handle.se { bottom: -10px; right: -10px; cursor: nwse-resize; }
+
+.cropper-actions {
+  display: flex;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+  border-top: 1px solid #e5e7eb;
+  background: #fafafa;
+}
+.cropper-btn {
+  flex: 1;
+  padding: 0.85rem 1rem;
+  border-radius: 12px;
+  border: none;
+  font-size: 0.95rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.cropper-cancel {
+  background: #f3f4f6;
+  color: #4b5563;
+}
+.cropper-cancel:hover { background: #e5e7eb; }
+.cropper-confirm {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  flex: 2;
+}
+.cropper-confirm:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(102, 126, 234, 0.4); }
+
+@media (max-width: 480px) {
+  .cropper-modal { max-height: 96vh; border-radius: 12px; }
+  .cropper-header { padding: 0.75rem 1rem; }
+  .cropper-header h3 { font-size: 0.95rem; }
+  .cropper-header p { font-size: 0.78rem; }
+  .cropper-handle { width: 22px; height: 22px; }
+  .cropper-handle.nw { top: -12px; left: -12px; }
+  .cropper-handle.ne { top: -12px; right: -12px; }
+  .cropper-handle.sw { bottom: -12px; left: -12px; }
+  .cropper-handle.se { bottom: -12px; right: -12px; }
+}
+
+/* ============================== */
 /* 📱 MOBILE OVERHAUL (comprehensive) */
 /* ============================== */
 @media (max-width: 768px) {

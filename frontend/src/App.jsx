@@ -3,6 +3,7 @@ import axios from 'axios'
 import './App.css'
 import DeveloperMode from './DeveloperMode.jsx'
 import TansiqDevMode from './TansiqDevMode.jsx'
+import ImageCropper from './ImageCropper.jsx'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 
@@ -126,6 +127,9 @@ function App() {
   const [imageLoading, setImageLoading] = useState(false)
   const [loadingAI, setLoadingAI] = useState(false)
   const fileInputRef = useRef(null)
+
+  // 🎯 Image cropper modal — يظهر بعد رفع صورة
+  const [cropperImage, setCropperImage] = useState(null)
 
   // 🔧 Developer Mode — tracks live pipeline data for the most recent search
   const [devInfo, setDevInfo] = useState(null)
@@ -439,8 +443,24 @@ function App() {
       return
     }
 
+    // ✨ بدل الإرسال المباشر، نعرض cropper ليختار المستخدم المنتج الرئيسي
     const reader = new FileReader()
-    reader.onload = async (ev) => {
+    reader.onload = (ev) => {
+      setCropperImage(ev.target.result)
+      setError('')
+      // reset input so the same file can be picked again
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+    reader.readAsDataURL(file)
+  }
+
+  // يُنادى بعد ما المستخدم يحدد المنطقة في الـ cropper
+  const submitCroppedImage = async (croppedDataUrl) => {
+    setCropperImage(null)
+    const reader = { onload: null }
+    // مباشرة استخدم الـ data URL
+    const ev = { target: { result: croppedDataUrl } }
+    {
       setImageLoading(true)
       setError('')
       try {
@@ -470,14 +490,8 @@ function App() {
         setError('فشل تحليل الصورة: ' + (err.response?.data?.message || err.message))
       } finally {
         setImageLoading(false)
-        if (fileInputRef.current) fileInputRef.current.value = ''
       }
     }
-    reader.onerror = () => {
-      setError('فشلت قراءة الملف')
-      setImageLoading(false)
-    }
-    reader.readAsDataURL(file)
   }
 
   const handleSuggestionClick = (suggestionQuery) => {
@@ -857,6 +871,13 @@ function App() {
 
   return (
     <div className="app" dir="rtl">
+      {cropperImage && (
+        <ImageCropper
+          imageSrc={cropperImage}
+          onConfirm={submitCroppedImage}
+          onCancel={() => setCropperImage(null)}
+        />
+      )}
       {modeSwitch}
       <DeveloperMode devInfo={devInfo} loading={loading} loadingAI={loadingAI} apiUrl={API_URL} />
       <header className="header">
