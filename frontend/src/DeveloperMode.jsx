@@ -165,9 +165,10 @@ export default function DeveloperMode({ devInfo, loading, loadingAI, apiUrl }) {
                     <strong>Intent-aware accessory filter:</strong> drops titles starting with accessory keywords
                     (وعاء, غطاء, شنطة, يدوي …) — UNLESS the query itself contains that keyword (e.g. "شنطة ترامس"
                     keeps thermos bags, "ترامس" excludes them).
-                    <strong> Subject scoring (0-1):</strong> each product scored by what fraction of subject words
-                    appear in its title. Perfect matches (1.0) come first; partial matches fill in when there aren't
-                    enough perfect ones — never returns zero when relevant products exist.
+                    <strong> Subject scoring (0-1):</strong> word-level stem equality (not substring) so "قلايز"
+                    does not match "قلاي". Each product scored by what fraction of subject stems appear in its
+                    title; perfect matches (1.0) come first, partial matches fill in. Alef variants
+                    (آ/أ/إ) and the "ال" prefix are normalized so "ألة" = "آلة" = "الة" = "الآلة".
                   </div>
                 </li>
 
@@ -205,8 +206,12 @@ export default function DeveloperMode({ devInfo, loading, loadingAI, apiUrl }) {
                   </div>
                   <div className="dev-stage-desc">
                     Four GPT-4.1-nano calls in parallel: AI summary, intent (LLM fallback), smart filters, related
-                    searches. Cached on disk + memory (24h TTL). nano costs $0.10/1M input + $0.40/1M output —
-                    33% cheaper than gpt-4o-mini.
+                    searches.
+                    <strong> Every intent suggestion is validated against the catalog</strong> via a quick ES count
+                    (fuzziness 0, AND operator); suggestions with &lt;3 real products are dropped, and the whole chip
+                    row is hidden if fewer than 2 valid options remain. AI Summary recommendations are pre-filtered
+                    by subject-match score so the LLM only picks from on-topic products. Cached on disk + memory
+                    (24h TTL).
                   </div>
                 </li>
               </ol>
@@ -354,7 +359,19 @@ kNN_LIMIT                 = 500 (fetched) → top 30 (displayed)
 RERANK_TOP                = 15
 TYPO_SKIP_THRESHOLD       = 5  // skip typo correction if original ≥ 5 results
 TYPO_EDGE_PENALTY         = first-char +0.5 · last-char +0.3
-SUBJECT_MATCH_STRATEGY    = score 0-1; perfect (1.0) preferred, partial fills
+SUBJECT_MATCH_STRATEGY    = word-level stem equality (not substring)
+                            "قلايز" ≠ "قلاي"; "ألة" = "آلة" = "الة"
+
+INTENT_VALIDATION         = every chip query runs a quick ES count;
+                            < 3 catalog matches → dropped;
+                            < 2 remaining chips → entire row hidden
+INTENT_PROMPT             = axis-based methodology + negative few-shots
+                            forbids mixed-axis or paraphrased suggestions
+
+AI_SUMMARY_PREFILTER      = recommendations pool restricted to products
+                            with subject score ≥ 0.5 (perfect first)
+RELATED_VALIDATION        = each suggestion checked against catalogVocab
+                            (2,676 unique stems) + length & stop-word caps
 
 ACCESSORY_KEYWORDS        = [وعاء, سلة, غطاء, شنطة, يدوي, …]
   └─ intent-aware: skipped when query itself contains the keyword
