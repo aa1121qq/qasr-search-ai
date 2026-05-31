@@ -91,16 +91,26 @@ export default function ImageCropper({ imageSrc, onConfirm, onCancel }) {
 
   const handleConfirm = () => {
     if (!imgRef.current) return
-    const canvas = document.createElement('canvas')
     const sx = crop.x * imgSize.naturalW
     const sy = crop.y * imgSize.naturalH
     const sw = crop.w * imgSize.naturalW
     const sh = crop.h * imgSize.naturalH
-    canvas.width = sw
-    canvas.height = sh
+
+    // 🎯 ضمان حد أدنى من الدقة (CLIP يحتاج 224×224 على الأقل)
+    // لو القصّ صغير، نضخّمه بـ canvas smooth scaling إلى 512px على الأقل
+    const MIN_SIZE = 512
+    const scale = Math.max(1, MIN_SIZE / Math.min(sw, sh))
+    const outW = Math.round(sw * scale)
+    const outH = Math.round(sh * scale)
+
+    const canvas = document.createElement('canvas')
+    canvas.width = outW
+    canvas.height = outH
     const ctx = canvas.getContext('2d')
-    ctx.drawImage(imgRef.current, sx, sy, sw, sh, 0, 0, sw, sh)
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.92)
+    ctx.imageSmoothingEnabled = true
+    ctx.imageSmoothingQuality = 'high'
+    ctx.drawImage(imgRef.current, sx, sy, sw, sh, 0, 0, outW, outH)
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.95)
     onConfirm(dataUrl)
   }
 

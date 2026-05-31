@@ -466,6 +466,7 @@ function App() {
       try {
         const response = await axios.post(`${API_URL}/image-search`, {
           image: ev.target.result,
+          userCropped: true,
         })
         if (response.data.success && response.data.visualSearch && response.data.products) {
           // 📷 بحث بصري — نعرض المنتجات المشابهة مباشرة بدون بحث نصي تالي
