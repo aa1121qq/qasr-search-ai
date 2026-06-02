@@ -771,9 +771,18 @@ function App() {
         🔍 مشروع البحث AI
       </button>
       <button
-        className="mode-switch-btn mode-switch-btn-locked"
-        disabled
-        title="غير متاح حالياً"
+        className={`mode-switch-btn ${mode === 'tansiq' ? 'active' : ''}`}
+        onClick={() => {
+          if (mode === 'tansiq') return
+          const pwd = window.prompt('🔒 هذا المشروع محمي بكلمة سر — أدخل كلمة السر:')
+          if (pwd === null) return // user cancelled
+          if (pwd === '114141') {
+            setMode('tansiq')
+          } else {
+            window.alert('❌ كلمة السر غير صحيحة')
+          }
+        }}
+        title="محمي بكلمة سر"
       >
         🔒 🎨 مشروع التنسيقات المتقدم AI
       </button>
