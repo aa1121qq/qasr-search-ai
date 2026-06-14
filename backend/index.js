@@ -139,7 +139,7 @@ async function translateForClip(arabicQuery) {
   }
   try {
     const r = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: 'gpt-4.1-nano',
       messages: [{
         role: 'user',
         content: `Translate this Arabic product search to short English (just the product noun(s), nothing else). Examples: "ثلاجة" → "refrigerator", "ماكينة قهوة" → "coffee machine", "قلاية هوائية" → "air fryer", "ترمس" → "thermos".\n\nArabic: "${arabicQuery}"\nEnglish:`,
@@ -173,6 +173,81 @@ async function clipImageEmbedding(imageInput) {
     return Array.from(result.data);
   } finally {
     if (tempFile) { try { fs.unlinkSync(tempFile); } catch {} }
+  }
+}
+
+
+// 🎯 Focused query embedding — للبحث بالصورة لما يرفع المستخدم صورة فيها عدة منتجات
+// متوسط مرجّح: 35% للصورة الكاملة + 65% للقَصّ المركزي (60% من الجانب الأقصر)
+// النتيجة: التركيز على المنتج اللي في وسط الصورة بدل المشهد كله
+async function clipImageEmbeddingFocused(imageInput) {
+  const sharp = require('sharp');
+  const os = require('os');
+  const fsx = require('fs');
+  if (typeof imageInput !== 'string' || !imageInput.startsWith('data:image/')) {
+    return clipImageEmbedding(imageInput);
+  }
+  const base64 = imageInput.split(',')[1];
+  const buffer = Buffer.from(base64, 'base64');
+  const tmps = [];
+  try {
+    const meta = await sharp(buffer).metadata();
+    const W = meta.width || 0;
+    const H = meta.height || 0;
+    const side = Math.min(W, H);
+    if (!side || side < 64) return clipImageEmbedding(imageInput);
+
+    // 🎯 Multi-region ensemble — يلتقط المنتج سواء كان مركزياً أو علوياً
+    // Banner/category images غالباً يكون المنتج في النصف العلوي مع نص بالأسفل
+    const mkCrop = async (frac, posY, suffix) => {
+      const s = Math.floor(side * frac);
+      const l = Math.floor((W - s) / 2);
+      // posY: 0 = top edge, 0.5 = center, 1 = bottom edge
+      const tmax = Math.max(0, H - s);
+      const t = Math.floor(tmax * posY);
+      const fp = path.join(os.tmpdir(), 'clip-' + suffix + '-' + Date.now() + '-' + Math.random().toString(36).slice(2) + '.jpg');
+      tmps.push(fp);
+      await sharp(buffer).extract({ left: l, top: t, width: s, height: s }).jpeg().toFile(fp);
+      return fp;
+    };
+
+    const fpFull = path.join(os.tmpdir(), 'clip-full-' + Date.now() + '-' + Math.random().toString(36).slice(2) + '.jpg');
+    tmps.push(fpFull);
+    await sharp(buffer).jpeg().toFile(fpFull);
+    // center crops
+    const fpCenter60 = await mkCrop(0.60, 0.5, 'c60');
+    const fpTight45 = await mkCrop(0.45, 0.5, 'c45');
+    // upper-biased crop — يلتقط المنتجات في النصف العلوي (banner/category images)
+    const fpUpper55 = await mkCrop(0.55, 0.25, 'up55');
+
+    const featurer = await getClipPipeline();
+    const [outFull, outCenter, outTight, outUpper] = await Promise.all([
+      featurer(fpFull),
+      featurer(fpCenter60),
+      featurer(fpTight45),
+      featurer(fpUpper55),
+    ]);
+    const vFull = Array.from(outFull.data);
+    const vCenter = Array.from(outCenter.data);
+    const vTight = Array.from(outTight.data);
+    const vUpper = Array.from(outUpper.data);
+
+    // Weighted blend across 4 regions:
+    //   - tight center (heaviest) — pure product, no text/logos
+    //   - center 60% — product + light context
+    //   - upper crop — catches products in top portion (banners with bottom text)
+    //   - full — overall scene
+    const blended = new Array(vFull.length);
+    for (let i = 0; i < vFull.length; i++) {
+      blended[i] = 0.15 * vFull[i] + 0.25 * vCenter[i] + 0.35 * vTight[i] + 0.25 * vUpper[i];
+    }
+    let norm = 0;
+    for (const x of blended) norm += x * x;
+    norm = Math.sqrt(norm) || 1;
+    for (let i = 0; i < blended.length; i++) blended[i] /= norm;
+    return blended;
+  } finally {
+    for (const t of tmps) { try { fsx.unlinkSync(t); } catch {} }
   }
 }
 
@@ -304,6 +379,7 @@ const ACCESSORY_KEYWORDS = [
   'خرطوم', 'سلك', 'موزّع', 'موزع', 'منفاخ',
   // shipping/storage and dish-rack accessories
   'شنطة', 'نشاف', 'نشافة', 'استاند', 'منشفة',
+  'يدوي', 'يدوية', 'يدويه',
 ];
 
 // كلمات تدل على جهاز كهربائي (لو موجودة في البحث = جهاز 100%)
@@ -346,6 +422,95 @@ const SPECIFIC_DEVICE_NAMES = [
 
 // قائمة موحدة لكشف أنواع البحث (للفحص السريع)
 const DEVICE_INDICATORS = [...GENERIC_DEVICE_WORDS, ...SPECIFIC_DEVICE_NAMES];
+
+// 🎯 KIND_HINTS — يربط كلمة البحث الأساسية بـ product_kind المتوقع
+// عند البحث "فرن"، المستخدم يبي appliance (الجهاز)، مو cookware (الأواني)
+// نستخدم هذي الخريطة لترتيب النتائج: المنتجات بـ kind المتوقع تأتي أولاً
+const KIND_HINTS = {
+  // Appliances (الأجهزة الكهربائية)
+  'فرن': 'appliance',
+  'ثلاجة': 'appliance',
+  'غسالة': 'appliance',
+  'نشافة': 'appliance',
+  'مكيف': 'appliance',
+  'مكنسة': 'appliance',
+  'مكواة': 'appliance',
+  'خلاط': 'appliance',
+  'محضر': 'appliance',
+  'مطحنة': 'appliance',
+  'عصارة': 'appliance',
+  'قلاية': 'appliance',
+  'محمصة': 'appliance',
+  'ميكروويف': 'appliance',
+  'بوتاجاز': 'appliance',
+  'شواية': 'appliance',
+  'دفاية': 'appliance',
+  'سخان': 'appliance',
+  'مدفأة': 'appliance',
+  'مروحة': 'appliance',
+  'صانعة': 'appliance',
+  'محضّر': 'appliance',
+  'عجانة': 'appliance',
+  'غلاية': 'appliance',
+  'طباخ': 'appliance',
+  'مبرد': 'appliance',
+  'موقد': 'appliance',
+  // Thermoses
+  'ترامس': 'thermos',
+  'ترمس': 'thermos',
+  'فاكيوم': 'thermos',
+  'ثرموس': 'thermos',
+  // Serveware
+  'فنجال': 'serveware',
+  'فنجان': 'serveware',
+  'فناجين': 'serveware',
+  'فناجيل': 'serveware',
+  'كوب': 'serveware',
+  'أكواب': 'serveware',
+  'كاسة': 'serveware',
+  'بيالة': 'serveware',
+  'بيالات': 'serveware',
+  'صحن': 'serveware',
+  'صحون': 'serveware',
+  'طبق': 'serveware',
+  'أطباق': 'serveware',
+  'دلة': 'serveware',
+  'دلال': 'serveware',
+  'إبريق': 'serveware',
+  'ابريق': 'serveware',
+  'صينية': 'serveware',
+  'طوفرية': 'serveware',
+  // Cookware (أدوات الطبخ)
+  'قدر': 'cookware',
+  'حلة': 'cookware',
+  'مقلاة': 'cookware',
+  'طاسة': 'cookware',
+  'وعاء': 'cookware',
+  'سلطانية': 'cookware',
+  // Kitchen tools
+  'سكين': 'kitchen_tool',
+  'سكاكين': 'kitchen_tool',
+  'ملعقة': 'kitchen_tool',
+  'ملاعق': 'kitchen_tool',
+  'شوكة': 'kitchen_tool',
+  'مبشرة': 'kitchen_tool',
+  // Storage
+  'علبة': 'storage',
+  'علب': 'storage',
+  'حافظة': 'storage',
+};
+
+// نُرجع الـ kind المتوقع للبحث (أو null لو الكلمة عامة)
+function getExpectedKind(query) {
+  if (!query) return null;
+  const words = query.toLowerCase().trim().split(/\s+/);
+  for (const w of words) {
+    const normalized = normalizeArabicText ? normalizeArabicText(w) : w;
+    if (KIND_HINTS[w]) return KIND_HINTS[w];
+    if (KIND_HINTS[normalized]) return KIND_HINTS[normalized];
+  }
+  return null;
+}
 
 function extractPrice(priceStr) {
   if (!priceStr) return 0;
@@ -476,7 +641,7 @@ async function cohereChat({ prompt, history = [], jsonMode = true, temperature =
     { role: 'user', content: prompt },
   ];
   const completion = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
+    model: 'gpt-4.1-nano',
     messages,
     temperature,
     response_format: jsonMode ? { type: 'json_object' } : undefined,
@@ -514,15 +679,21 @@ async function getQueryEmbedding(query) {
 }
 
 // فحص هل المنتج ملحق أو جهاز
-function isAccessory(title, deviceKeyword) {
+// 🎯 يفحص هل المنتج ملحق
+// query (اختياري): إذا الـ query يحوي accessory keyword → لا نعتبر المنتج ملحقاً
+// (المستخدم طلبه صراحة، مثل: "شنطة ترامس" يبي شناطات، ما يبي يستبعدها)
+function isAccessory(title, deviceKeyword, query = '') {
   if (!title) return false;
   const titleLower = title.toLowerCase().trim();
-
-  // نفحص أول 3 كلمات فقط — إذا كانت كلمة ملحق هي الأولى أو الثانية، فهو ملحق
-  // مثل: "درج ثلاجة بلاستيك" → أول كلمة "درج" → ملحق
-  // أما "ثلاجة بمقبض ذهبي" → أول كلمة "ثلاجة" → ليس ملحق
   const firstWords = titleLower.split(/\s+/).slice(0, 3);
-  return firstWords.some(w => ACCESSORY_KEYWORDS.includes(w));
+  const matchedAccessory = firstWords.find(w => ACCESSORY_KEYWORDS.includes(w));
+  if (!matchedAccessory) return false;
+  // ✨ الحل الجذري: إذا الـ query يطلب هذا النوع من الـ accessory صراحة، لا نستبعده
+  if (query) {
+    const queryWords = query.toLowerCase().split(/\s+/);
+    if (queryWords.includes(matchedAccessory)) return false;
+  }
+  return true;
 }
 
 // أجهزة كبيرة — أي مقاس "X مل" أو "X لتر" حيث X<10، أو "اطفال" يُستبعد
@@ -570,20 +741,64 @@ function isUndersizedForLargeAppliance(title) {
 // نشيل فقط الكلمات العامة (ماكينة/آلة/جهاز/صانعة) ونحتفظ بأسماء الأجهزة المحددة
 // مثال: "ماكينة قهوة" → "قهوة" (نشيل "ماكينة")
 // مثال: "غسالة ملابس" → "غسالة ملابس" (لا نشيل "غسالة" لأنها اسم الجهاز نفسه)
+// كلمات Modifier تُستبعد من الموضوع (لون/مادة/صفة)
+// لأنها تُطبَّق كفلتر منفصل (modifier filter / color field) وليست جزءاً من اسم المنتج
+const SUBJECT_MODIFIERS = [
+  // ألوان
+  'احمر','أحمر','حمراء',
+  'ابيض','أبيض','بيضاء',
+  'اسود','أسود','سوداء',
+  'ازرق','أزرق','زرقاء',
+  'اصفر','أصفر','صفراء',
+  'اخضر','أخضر','خضراء',
+  'بني','بنية',
+  'وردي','وردية',
+  'برتقالي','برتقالية',
+  'رمادي','رمادية',
+  'بنفسجي','بنفسجية',
+  'ذهبي','ذهبية',
+  'فضي','فضية',
+  'نحاسي','نحاسية',
+  // مواد
+  'إستيل','استيل','ستيل','ستانلس',
+  'زجاج','زجاجي','زجاجية',
+  'بلاستيك','بلاستيكي','بلاستيكية',
+  'سيراميك',
+  'خشب','خشبي','خشبية',
+  'جرانيت','ميلامين',
+  // مصدر طاقة
+  'كهربائي','كهربائية','كهرباء',
+  'يدوي','يدوية','يدويه',
+  'لاسلكي','لاسلكية',
+  // نوع تشغيل
+  'بخار','بخاري','بخارية',
+  'هوائي','هوائية',
+  'إنفرتر','انفرتر',
+  // صفات عامة
+  'صغير','صغيرة','كبير','كبيرة','متوسط','متوسطة',
+  'جديد','جديدة','أصلي','اصلي','أصلية','اصلية',
+  'مميز','مميزة','فاخر','فاخرة',
+  'منزلي','منزلية',
+  // تصميم
+  'مدمج','مدمجة','سبلت','شباك','متنقل','بابين','مفرد','طقم',
+];
+
 function extractSubject(query) {
-  // نضيف مسافة في البداية والنهاية لتسهيل المطابقة بحدود الكلمات
-  let subject = ' ' + (query || '').toLowerCase().trim() + ' ';
-  
-  // إزالة الكلمات العامة فقط (مع مراعاة حدود الكلمات: مسافة/بداية/نهاية)
-  // هذا يمنع حذف "الة" من داخل كلمات أخرى مثل "غسالة"
-  GENERIC_DEVICE_WORDS.forEach(word => {
-    const regex = new RegExp(`(\\s)${word}(\\s)`, 'g');
-    subject = subject.replace(regex, ' ');
+  if (!query) return '';
+  // طبّع كلمات الـ strip list (يوحد الألف بأشكاله: آ/أ/إ → ا)
+  const wordsToStrip = new Set([...GENERIC_DEVICE_WORDS, ...SUBJECT_MODIFIERS].map(w => normalizeArabicText(w)));
+  // قسّم الـ query، طبّع كل كلمة قبل المقارنة، حتى نلتقط "ألة"/"آلة"/"الة" كنفس الكلمة
+  const filtered = query.toLowerCase().trim().split(/\s+/).filter(w => {
+    if (!w) return false;
+    if (/^\d+(\.\d+)?$/.test(w)) return false;
+    if (/^(لتر|مل|كجم|كيلو|واط|بار|انش|سم|متر)$/.test(w)) return false;
+    const normalized = normalizeArabicText(w);
+    if (wordsToStrip.has(normalized)) return false;
+    return true;
   });
-  
-  // تنظيف المسافات الزائدة
-  return subject.replace(/\s+/g, ' ').trim();
+  return filtered.join(' ');
 }
+
 
 // 🔤 تطبيع النص العربي (توحيد الحروف المتشابهة وإزالة التشكيل)
 function normalizeArabicText(text) {
@@ -600,7 +815,8 @@ function normalizeArabicText(text) {
 // مثال: "ثلاجات" → "ثلاج"، "منزلية" → "منزل"، "ماكينة" → "ماكين"
 function normalizeArabicWord(word) {
   let w = normalizeArabicText(word);
-  
+  // إزالة بادئة "ال" التعريفية (لو الكلمة أطول من 4 حروف)
+  if (w.startsWith('ال') && w.length > 4) w = w.substring(2);
   // إزالة اللواحق الشائعة (الأطول أولاً)
   const suffixes = ['ات', 'ين', 'ون', 'ها', 'ية', 'ة', 'ه'];
   for (const suffix of suffixes) {
@@ -696,31 +912,31 @@ function applyModifierFilters(query, products) {
 
 // 🎯 فحص ذكي: هل عنوان المنتج يطابق "موضوع" البحث؟
 // يستخدم تطبيع عربي + مطابقة بالجذر + قواعد ذكية للكلمات المتعددة
-function titleMatchesSubject(title, subject) {
-  if (!title || !subject) return false;
-  
-  const normalizedTitle = normalizeArabicText(title);
+// ✨ يُرجع score من 0-1 يمثل نسبة تطابق كلمات الموضوع مع العنوان
+// 1.0 = كل الكلمات موجودة، 0.5 = نصف الكلمات، 0 = لا شيء
+function scoreSubjectMatch(title, subject) {
+  if (!title || !subject) return 0;
+  // 🎯 تطابق على مستوى الكلمة (stem-equality)، ليس substring
+  // يمنع false positives مثل "قلايز" يطابق "قلاي" (stem لـ قلاية)
+  const titleWords = normalizeArabicText(title).split(/\s+/).filter(w => w.length >= 2);
+  const titleStems = new Set(titleWords.map(w => normalizeArabicWord(w)));
+  // أيضاً نضيف الكلمات الكاملة كاحتياط (للأرقام والأسماء غير العربية)
+  titleWords.forEach(w => titleStems.add(w));
+
   const subjectWords = subject.split(/\s+/).filter(w => w.length >= 2);
-  if (subjectWords.length === 0) return false;
-  
-  // استخراج جذور كلمات الموضوع
-  const stems = subjectWords.map(w => normalizeArabicWord(w));
-  
-  // 1️⃣ كلمة واحدة: يجب أن تطابق (مثلاً "ثلج" أو "قهوة")
-  if (stems.length === 1) {
-    return normalizedTitle.includes(stems[0]);
+  if (subjectWords.length === 0) return 0;
+  const subjectStems = subjectWords.map(w => normalizeArabicWord(w));
+
+  let matched = 0;
+  for (const stem of subjectStems) {
+    if (titleStems.has(stem)) matched++;
   }
-  
-  // 2️⃣ عدة كلمات + الكلمة الأولى محددة (4+ حروف): الأولى تكفي
-  // (مثل: "ثلاجات منزلية" → "ثلاج" يكفي لأنها محددة)
-  const firstStem = stems[0];
-  if (firstStem.length >= 4) {
-    return normalizedTitle.includes(firstStem);
-  }
-  
-  // 3️⃣ الكلمة الأولى قصيرة: نطلب كل الكلمات
-  // (مثل: "آيس كريم" → كلتاهما مطلوبتان لتجنب مطابقة "آيس بوكس")
-  return stems.every(stem => normalizedTitle.includes(stem));
+  return matched / subjectStems.length;
+}
+
+// للتوافق: يُرجع true لو السكور >= threshold معين
+function titleMatchesSubject(title, subject, minScore = 1.0) {
+  return scoreSubjectMatch(title, subject) >= minScore;
 }
 
 app.get('/', (req, res) => {
@@ -792,6 +1008,7 @@ const INTENT_DICTIONARY = {
   ],
   'قلاية': [
     { title: 'قلاية هوائية', description: 'بدون زيت', icon: 'fire', searchQuery: 'قلاية هوائية' },
+    { title: 'قلاية زيت', description: 'تقليدية', icon: 'kitchen', searchQuery: 'قلاية زيت' },
     { title: 'قلاية دبل', description: 'بمقصورتين', icon: 'sparkles', searchQuery: 'قلاية دبل' },
   ],
   'خلاط': [
@@ -828,7 +1045,7 @@ const INTENT_DICTIONARY = {
     { title: 'طقم قدور', description: 'طقم كامل', icon: 'gift', searchQuery: 'طقم قدور' },
   ],
   'مكيف': [
-    { title: 'مكيف سبلت', description: 'وحدتين منفصلتين', icon: 'home', searchQuery: 'مكيف سبلت' },
+    { title: 'مكيف سبليت', description: 'وحدتين منفصلتين', icon: 'home', searchQuery: 'مكيف سبليت' },
     { title: 'مكيف شباك', description: 'وحدة واحدة للشباك', icon: 'home', searchQuery: 'مكيف شباك' },
     { title: 'مكيف متنقل', description: 'محمول', icon: 'package', searchQuery: 'مكيف متنقل' },
   ],
@@ -994,14 +1211,21 @@ const INTENT_ALIASES = {
 function getDictionaryIntent(query) {
   if (!query) return null;
   const q = query.toLowerCase().trim();
+  // 1) لو الـ query كامل = مفتاح بالقاموس (multi-word مثل "ميني بان كيك") → استخدمه
+  if (INTENT_DICTIONARY[q]) {
+    return {
+      isAmbiguous: true,
+      message: 'اختر النوع اللي تبيه:',
+      suggestions: INTENT_DICTIONARY[q],
+    };
+  }
   const words = q.split(/\s+/);
-  // إذا الاستعلام طويل (3+ كلمات) فالمستخدم محدد بالفعل — لا نقترح
+  // 2) لو 3+ كلمات وما لقينا مفتاح كامل، البحث محدد بالفعل
   if (words.length >= 3) return null;
-  // نبحث عن كلمة أساسية في القاموس
+  // 3) نبحث عن كلمة أساسية في القاموس
   for (const w of words) {
     const root = INTENT_ALIASES[w] || w;
     if (INTENT_DICTIONARY[root]) {
-      // إذا الاستعلام فيه كلمة وصفية (طول 2+ كلمة)، لا نقترح
       if (words.length > 1) return null;
       return {
         isAmbiguous: true,
@@ -1118,6 +1342,38 @@ function getStatisticalIntent(query, products) {
   return { isAmbiguous: true, message: 'اختر النوع اللي تبيه:', suggestions };
 }
 
+// 🛡️ يتحقق من كل اقتراح intent ضد كتالوج المتجر
+// لو الاقتراح يرجّع < 3 منتجات حقيقية → احذفه
+// لو بقي < 2 → أرجع isAmbiguous=false (نخفي chips)
+// يضمن إن المستخدم لما يضغط chip ما يلقى صفحة فاضية
+async function validateIntentSuggestions(intentResult, query) {
+  if (!intentResult || !intentResult.suggestions || intentResult.suggestions.length === 0) {
+    return intentResult;
+  }
+  const MIN_PRODUCTS = 2;
+  const validated = [];
+  for (const s of intentResult.suggestions) {
+    if (!s.searchQuery) continue;
+    // ما نتحقق من نفس الـ query الأصلي (يرجع نتائج كثيرة بطبيعته)
+    if (s.searchQuery.toLowerCase().trim() === (query || '').toLowerCase().trim()) continue;
+    try {
+      const cnt = await quickCountForQuery(s.searchQuery);
+      if (cnt >= MIN_PRODUCTS) {
+        validated.push(s);
+      } else {
+        console.log(`  intent rejected: "${s.searchQuery}" (${cnt} products in catalog)`);
+      }
+    } catch {
+      // لو فشل ES، نحتفظ بالاقتراح (لا نخسره بسبب خطأ شبكة)
+      validated.push(s);
+    }
+  }
+  if (validated.length < 2) {
+    return { isAmbiguous: false, message: '', suggestions: [] };
+  }
+  return { ...intentResult, suggestions: validated };
+}
+
 async function detectIntent(query, sampleProducts) {
   const cacheKey = (query || '').toLowerCase().trim();
   const cached = intentCache.get(cacheKey);
@@ -1126,15 +1382,17 @@ async function detectIntent(query, sampleProducts) {
   // ⚡ مسار سريع 1: قاموس Intent — لا LLM، <1ms
   const dictResult = getDictionaryIntent(query);
   if (dictResult) {
-    intentCache.set(cacheKey, dictResult);
-    return dictResult;
+    const validated = await validateIntentSuggestions(dictResult, query);
+    intentCache.set(cacheKey, validated);
+    return validated;
   }
 
   // ⚡ مسار سريع 2: استخراج إحصائي من عناوين النتائج — لا LLM، ~5ms
   const statResult = getStatisticalIntent(query, sampleProducts);
   if (statResult) {
-    intentCache.set(cacheKey, statResult);
-    return statResult;
+    const validated = await validateIntentSuggestions(statResult, query);
+    intentCache.set(cacheKey, validated);
+    return validated;
   }
 
   try {
@@ -1169,10 +1427,60 @@ ${productExamples}
 
 ❌ لا تقترح ماركات (سامسونج، ميديا، LG...) كاقتراحات أساسية — الماركات تظهر كفلاتر منفصلة.
 
-⚠️ قواعد صارمة:
-1. كل اقتراح يحتوي على كلمة "${query}" (أو جذرها) + كلمة وصفية للنوع
-2. ركّز على **التمييز الوظيفي** (ما هو نوع المنتج) لا الماركة
+🎯 منهجية إلزامية (اتبعها بالترتيب):
+
+الخطوة 1 — حدّد المحور:
+اقرأ الـ 40 عنوان فعلياً. حدّد محور تمييز واحد يتكرر فيها.
+أمثلة محاور:
+  - مصدر الطاقة (كهربائي / يدوي / بطارية)
+  - طريقة التسخين (هوائية بدون زيت / زيت تقليدي)
+  - الحجم (صغير / كبير / دبل)
+  - نوع التحميل (أمامي / علوي)
+  - الوظيفة (ملابس / صحون)
+  - المادة (زجاج / ستيل / بلاستيك)
+  - شكل المنتج (مدمج / منفصل / متنقل)
+
+الخطوة 2 — استخرج قيم متعارضة من العناوين:
+على نفس المحور، استخرج 2-3 قيم متعارضة موجودة فعلياً في العناوين.
+"متعارضة" = منتج واحد لا يقدر يحقّق قيمتين منها في نفس الوقت.
+
+الخطوة 3 — تحقّق من الحصرية:
+لو منتج يقدر يطابق اقتراحين في نفس الوقت → الاقتراحات على محاور مختلطة
+→ ارفضها وارجع للخطوة 1.
+
+الخطوة 4 — تحقّق من التواجد:
+كل قيمة لازم تكون مذكورة (أو مشتقة) من 3+ عناوين على الأقل من الـ 40 عنوان.
+لو ما لقيت قيمتين على نفس المحور بهالشرط → أرجع isAmbiguous=false.
+
+❌ ممنوع تخترع قيم من معرفتك العامة. القيم لازم تنبع من الـ 40 عنوان فقط.
+
+⚠️ قواعد إضافية:
+1. كل اقتراح يحتوي على كلمة "${query}" (أو جذرها) + كلمة وصفية
+2. ركّز على التمييز الوظيفي (ما هو نوع المنتج) لا الماركة
 3. searchQuery قصير (2-4 كلمات)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+❌ مثال خطأ — محاور مختلطة:
+البحث: "ميني بان كيك"
+السيء:
+  - "ميني بان كيك كهربائية" (محور: مصدر الطاقة)
+  - "ميني بان كيك قابل للحمل" (محور: قابلية النقل)
+السبب: منتج واحد ممكن يكون كهربائي وقابل للحمل في نفس الوقت → محاور مختلطة.
+
+✅ الصح:
+لو الـ 40 عنوان فيها أحجام مختلفة موجودة فعلياً:
+  - "ميني بان كيك 7 قوالب"
+  - "ميني بان كيك 12 قالب"
+لو ما فيها محور متعارض واضح → isAmbiguous=false.
+
+❌ مثال خطأ — صياغات لنفس الشي:
+البحث: "ميني بان كيك"
+السيء:
+  - "آلة ميني بان كيك"
+  - "جهاز ميني بان كيك"
+  - "ماكينة ميني بان كيك"
+السبب: نفس المعنى بكلمات مرادفة، لا تساعد المستخدم في التمييز.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 🔍 متى isAmbiguous = true؟
 - إذا الكلمة تحتمل أنواع جوهرياً مختلفة (غسالة/فرن/خلاط/مكواة...)
@@ -1193,8 +1501,33 @@ ${productExamples}
 
     const text = await cohereChat({ prompt, jsonMode: true, temperature: 0.7 });
     const result = JSON.parse(text);
-    intentCache.set(cacheKey, result);
-    return result;
+
+    // ━━━ Layer 1: Dedup الصياغات المكررة (آلة/جهاز/ماكينة لنفس الشي) ━━━
+    if (result.suggestions && result.suggestions.length > 1) {
+      const querySigs = new Set(query.toLowerCase().split(/\s+/).map(w => normalizeArabicWord(w)));
+      const seen = [];
+      const unique = [];
+      for (const s of result.suggestions) {
+        if (!s.searchQuery) continue;
+        const sigWords = s.searchQuery.toLowerCase().split(/\s+/)
+          .map(w => normalizeArabicWord(w))
+          .filter(w => w.length >= 2 && !querySigs.has(w));
+        const sig = sigWords.sort().join('|');
+        if (!seen.includes(sig)) { seen.push(sig); unique.push(s); }
+      }
+      const meaningful = unique.filter(s => {
+        const sigWords = s.searchQuery.toLowerCase().split(/\s+/)
+          .map(w => normalizeArabicWord(w))
+          .filter(w => w.length >= 2 && !querySigs.has(w));
+        return sigWords.length > 0;
+      });
+      result.suggestions = meaningful;
+    }
+
+    // ━━━ Layer 2: Catalog validation عبر helper موحّد ━━━
+    const validatedResult = await validateIntentSuggestions(result, query);
+    intentCache.set(cacheKey, validatedResult);
+    return validatedResult;
   } catch (error) {
     console.error('Intent error:', error.message);
     return { isAmbiguous: false, message: '', suggestions: [] };
@@ -1463,46 +1796,58 @@ async function generateRelatedSearches(query, products) {
     // نرسل 40 عنواناً مع تنوع كافي ليرى الـ AI ما الموجود فعلاً
     const productExamples = products.slice(0, 40).map(p => p.title).join('\n');
 
-    const prompt = `أنت محرك اقتراحات ذكي لمتجر "قصر الأواني" السعودي.
+    const prompt = `أنت محرك اقتراحات لمتجر أدوات منزلية سعودي.
 
-بحث المستخدم: "${query}"
+بحث العميل: "${query}"
 
-عناوين المنتجات المتوفرة فعلاً في المتجر:
+عناوين منتجات من المتجر:
 ${productExamples}
 
-🎯 المهمة:
-اقترح 4 بحوث ذات صلة مكمّلة لبحث المستخدم، **بشرط أن تكون منتجات موجودة فعلاً** في العناوين أعلاه.
+🎯 المهمة: اقترح 6 منتجات **مكمّلة** أو **مشابهة** قد يحتاجها العميل.
+الاقتراحات يجب أن تكون منتجات أخرى يبيعها المتجر (تظهر في العناوين أو منتجات مماثلة).
 
-📌 القاعدة الأهم:
-لا تخترع منتجات غير موجودة. كل اقتراح يجب أن يطابق **منتج حقيقي** من العناوين المعروضة لك.
+📌 قواعد صارمة:
+- كل اقتراح: اسم منتج بسيط، 1-3 كلمات (مثلاً "ميكروويف"، "فناجين قهوة"، "خلاط")
+- يجب أن يكون **اسم منتج** يبيعه المتجر، ليس وصفاً أو نصيحة
+- لا تبدأ بكلمات: "أفضل"، "نصائح"، "كيفية"، "مقارنة"، "أنواع"
+- منتجات مكمّلة: لو بحث "ماكينة قهوة" → اقترح "فناجين"، "مطحنة قهوة"، "دلال قهوة"
+- منتجات مشابهة: لو بحث "ثلاجة" → اقترح "فريزر"، "ميكروويف"، "ثلاجة صغيرة"
 
-أمثلة على المنطق الصحيح:
-- بحث "ماكينة قهوة" + لو العناوين فيها فعلاً "مطحنة قهوة"، "فناجين"، "دلال" → اقترح هذه
-- بحث "ماكينة قهوة" + العناوين ما فيها "حبوب قهوة" → ❌ لا تقترح "حبوب قهوة"
+أمثلة اقتراحات صحيحة (للإلهام):
+- بحث "قلاية" → ["قلاية هوائية", "فرن كهربائي", "ميكروويف", "شواية", "ملاعق قلي"]
+- بحث "ترامس" → ["فناجين قهوة", "أكواب شاي", "صينية تقديم", "دلة قهوة"]
+- بحث "محضر طعام" → ["خلاط", "عجانة", "مطحنة", "قلاية هوائية"]
 
-⚠️ خطوات إلزامية:
-1. اقرأ العناوين أعلاه بدقة
-2. حدّد 4 أنواع منتجات **مذكورة فعلاً** في العناوين، مختلفة عن "${query}" لكن ذات صلة
-3. كل اقتراح 2-4 كلمات + emoji مناسب
-
-أعد JSON فقط: {"relatedSearches": [{"icon": "emoji", "query": "البحث"}]}`;
+أعد JSON فقط: {"relatedSearches": [{"icon": "emoji", "query": "اسم منتج بسيط"}]}`;
 
     const text = await cohereChat({ prompt, jsonMode: true, temperature: 0.7 });
     const result = JSON.parse(text);
     const raw = result.relatedSearches || [];
 
-    // ✅ validation: نتأكد كل اقتراح فعلاً موجود في الكاتلوج
-    const allTitles = products.map(p => (p.title || '').toLowerCase()).join(' || ');
+    // ✅ validation: حد طول + كلمة معنوية واحدة من كتالوج المتجر الكامل
+    // نستخدم catalogVocab (2,676 كلمة فريدة من 9,299 منتج) بدل 40 عنوان فقط
+    const STOP_WORDS = new Set(['نصائح','صيانة','مقارنات','أفضل','أنواع','استخدام','كيفية','تنظيف','اختيار','مع','من','في','إلى']);
+    const queryLower = (query || '').toLowerCase().trim();
     const validated = raw.filter(s => {
       if (!s.query) return false;
-      const words = s.query.toLowerCase().split(/\s+/).filter(w => w.length >= 2);
-      if (words.length === 0) return false;
-      // كل كلمة من الاقتراح يجب تظهر في عناوين الكاتلوج
-      return words.every(w => allTitles.includes(w));
+      const q = s.query.trim();
+      const words = q.split(/\s+/).filter(w => w.length >= 2);
+      if (words.length === 0 || words.length > 4 || q.length > 35) return false;
+      if (words.some(w => STOP_WORDS.has(w))) return false;
+      // ❌ لا يكون نفس البحث الأصلي
+      if (q.toLowerCase() === queryLower) return false;
+      // ✅ على الأقل كلمة واحدة (normalized) موجودة في كتالوج المتجر الكامل
+      const hasVocabMatch = words.some(w => {
+        const norm = normalizeArabicWord(w);
+        return catalogVocab.has(norm) || catalogVocab.has(normalizeArabicText(w));
+      });
+      return hasVocabMatch;
     });
+    // إذا فيه أكثر من 6 ناجحة، خذ أول 6
+    const finalValidated = validated.slice(0, 6);
 
-    relatedSearchesCache.set(cacheKey, validated);
-    return validated;
+    relatedSearchesCache.set(cacheKey, finalValidated);
+    return finalValidated;
   } catch (error) {
     console.error('Related searches error:', error.message);
     return [];
@@ -1545,11 +1890,36 @@ async function generateAISummary(query, products, preferHomeElec) {
   if (cached) return cached;
   try {
     // 1️⃣ تحضير المنتجات مع الأسعار الفعلية
-    const productsWithDetails = products.slice(0, 30).map(p => {
+    let productsWithDetails = products.slice(0, 30).map(p => {
       const discount = getDiscountInfo(p.price, p.sale_price);
       const effectivePrice = discount.hasDiscount ? extractPrice(p.sale_price) : extractPrice(p.price);
-      return { title: p.title, price: p.price, sale_price: p.sale_price, effectivePrice, brand: p.brand, image_link: p.image_link, link: p.link };
+      return { title: p.title, price: p.price, sale_price: p.sale_price, effectivePrice, brand: p.brand, image_link: p.image_link, link: p.link, product_kind: p.product_kind };
     }).filter(p => p.effectivePrice > 0);
+
+    // 🎯 فلتر صارم لـ AI Summary: نأخذ فقط المنتجات اللي تطابق الموضوع perfectly
+    // يمنع التوصيات لمنتجات غير ذات صلة (مثل "شيال قلايز" يظهر لبحث "قلاية")
+    const aiSubject = extractSubject(query);
+    if (aiSubject) {
+      const scored = productsWithDetails.map(p => ({ p, score: scoreSubjectMatch(p.title, aiSubject) }));
+      const perfectMatches = scored.filter(x => x.score >= 0.999).map(x => x.p);
+      if (perfectMatches.length >= 3) {
+        productsWithDetails = perfectMatches;
+      } else {
+        productsWithDetails = scored.filter(x => x.score >= 0.5).sort((a, b) => b.score - a.score).map(x => x.p);
+      }
+    }
+
+    // 🎯 Kind filter: لو البحث يحدد kind (فرن→appliance، سكين→kitchen_tool)
+    // نُبقي فقط المنتجات اللي تطابق الـ kind المتوقع.
+    // يمنع "زبدية فرن" يظهر كـ "أرخص فرن" في توصيات بحث "فرن"
+    const expectedKindForSummary = getExpectedKind(query);
+    if (expectedKindForSummary) {
+      const matching = productsWithDetails.filter(p => p.product_kind === expectedKindForSummary);
+      if (matching.length >= 3) {
+        productsWithDetails = matching;
+      }
+      // لو أقل من 3، ما نطبّق (نتجنب 0 توصيات)
+    }
 
     if (productsWithDetails.length === 0) return null;
 
@@ -2043,15 +2413,24 @@ function findCatalogCandidates(word, maxCount = 5) {
     });
   }
 
-  // 2) كل الـ fuzzy candidates ضمن maxDistance، مرتّبين حسب (distance ثم count desc)
+  // 2) كل الـ fuzzy candidates ضمن maxDistance
+  // adjustedDistance يضيف penalty عند اختلاف أول/آخر حرف — يفضّل التصحيحات اللي تحافظ على الحروف الطرفية
+  // مثال: \"غسلة\" → \"غسالة\" (أول حرف محفوظ) أفضل من \"سلة\" (أول حرف ضائع) رغم تساوي levenshtein
   const fuzzy = [];
+  const queryFirst = norm[0];
+  const queryLast = norm[norm.length - 1];
   for (const [vocabWord, entry] of catalogVocab) {
     if (vocabWord === norm) continue;
     if (Math.abs(vocabWord.length - norm.length) > maxDistance) continue;
     const d = levenshtein(norm, vocabWord);
-    if (d <= maxDistance) fuzzy.push({ word: entry.display, distance: d, count: entry.count, isExactSpelling: false });
+    if (d <= maxDistance) {
+      const firstPenalty = vocabWord[0] !== queryFirst ? 0.5 : 0;
+      const lastPenalty = vocabWord[vocabWord.length - 1] !== queryLast ? 0.3 : 0;
+      const adjustedDistance = d + firstPenalty + lastPenalty;
+      fuzzy.push({ word: entry.display, distance: d, adjustedDistance, count: entry.count, isExactSpelling: false });
+    }
   }
-  fuzzy.sort((a, b) => a.distance - b.distance || b.count - a.count);
+  fuzzy.sort((a, b) => a.adjustedDistance - b.adjustedDistance || b.count - a.count);
 
   // 3) دمج: لو exact نادر (count ≤ 2) ولدينا بديل قريب جداً ≥ 5x count → نُفضّل البديل أولاً
   if (exactEntry && fuzzy.length > 0) {
@@ -2080,12 +2459,22 @@ function catalogTypoCorrectionCandidates(query, maxResults = 5) {
   const words = query.trim().split(/\s+/).filter(w => w.length >= 2);
   if (words.length === 0) return [];
 
+  // 🛡️ كلمات معروفة لا تحتاج تصحيح (device-words + modifiers)
+  // يمنع "آلة" تتحوّل لـ "إلك" (brand) أو "كهربائي" يتحول لمنتج آخر
+  const KNOWN_WORDS = new Set(
+    [...GENERIC_DEVICE_WORDS, ...SUBJECT_MODIFIERS, ...SPECIFIC_DEVICE_NAMES]
+      .map(w => normalizeArabicText(w))
+  );
+
   // لكل كلمة: ابحث عن مرشحين متعدّدين (للكلمات اللي فيها typo)
   const wordCandidates = words.map(w => {
+    // لو الكلمة معروفة (جهاز/modifier)، احتفظ بها كما هي بدون تصحيح
+    if (KNOWN_WORDS.has(normalizeArabicText(w))) {
+      return [{ word: w, isExactSpelling: true, count: 0 }];
+    }
     const cands = findCatalogCandidates(w, 3);
     if (cands.length === 0) return [{ word: w, isExactSpelling: true, count: 0 }];
     if (cands[0].isExactSpelling) return [cands[0]];
-    // إذا أفضل candidate ليس exact: نرجع أول 2-3 مرشحين للتجربة
     return cands.slice(0, 3);
   });
 
@@ -2107,7 +2496,7 @@ function catalogTypoCorrectionCandidates(query, maxResults = 5) {
       let wordCost;
       if (cand.isExactSpelling) wordCost = 0;
       else if (cand.distance === 0) wordCost = 0.5;   // canonical normalization
-      else wordCost = cand.distance;
+      else wordCost = (cand.adjustedDistance != null ? cand.adjustedDistance : cand.distance);
       buildCombo(idx + 1, [...current, cand.word], totalCost + wordCost, totalCount + (cand.count || 0));
     }
   };
@@ -2193,6 +2582,13 @@ async function detectTypo(query, originalCount = null) {
   try {
     if (originalCount === null) originalCount = await quickCountForQuery(query);
 
+    // 0) لو الكويري الأصلي يعطي نتائج كافية (5+)، فهو صحيح — لا نقترح تصحيحاً
+    // هذا يمنع الـ false positives مثل: \"غسالة\" (50 نتيجة) → \"غلاية\" (خطأ)
+    if (originalCount >= 5) {
+      typoCache.set(key, null);
+      return null;
+    }
+
     // 1) ⭐ المسار الأساسي: تصحيح من كتالوج المنتجات الحقيقي
     // المرشحون مرتّبون مسبقاً حسب cost (Levenshtein) من catalogTypoCorrectionCandidates
     // نأخذ أوّل مرشح يحقّق الشرط: count كافٍ. نحتفظ بالترتيب (لا نُعيد الفرز).
@@ -2266,7 +2662,7 @@ app.post('/tansiq', async (req, res) => {
     const searchRes = await esClient.search({
       index: INDEX_NAME,
       size: 30,
-      _source: ['title', 'image_link', 'price', 'sale_price', 'brand', 'link', 'color', 'size'],
+      _source: ['title', 'image_link', 'price', 'sale_price', 'brand', 'link', 'color', 'size', 'product_kind'],
       knn: {
         field: 'embedding',
         query_vector: queryEmbedding,
@@ -2396,7 +2792,7 @@ async function generateWithGemini(prompt, items) {
   }
 
   const response = await gemini.models.generateContent({
-    model: 'gemini-3-pro-image-preview',
+    model: 'gemini-3.1-flash-image-preview',
     contents: [{ role: 'user', parts: [{ text: prompt }, ...imageParts] }],
   });
 
@@ -2487,6 +2883,26 @@ app.post('/tansiq-compose', async (req, res) => {
 ║       • A saucer (~2cm tall) MUST appear as a thin disc,       ║
 ║         not as a deep bowl                                     ║
 ║       • Tea/coffee cups (~7cm) MUST appear ~1/4 the thermos    ║
+║                                                                ║
+║ 12. ⚠️ QUANTITY LIMITS FOR SETS — CRITICAL:                    ║
+║       • If a product is a SET of cups/glasses/saucers/         ║
+║         فناجين/بيالات/كاسات (typically 6+ pieces in catalog),  ║
+║         render ONLY 2 pieces visible in the scene              ║
+║       • DO NOT render all 6 cups stacked or lined up           ║
+║       • The 2 visible pieces should look natural — placed      ║
+║         beside the hero, not crowded                           ║
+║       • This applies to ANY multi-piece set: cups, glasses,    ║
+║         saucers, plates, spoons                                ║
+║                                                                ║
+║ 13. ⚠️ TRAY/SERVING-PLATE PLACEMENT — CRITICAL:                ║
+║       • Trays (صينية/طوفرية/صحن تقديم) MUST lay FLAT,          ║
+║         HORIZONTAL on the surface — like a foundation          ║
+║       • Other products (thermos, cups, teapot) MUST sit        ║
+║         ON TOP of the tray when a tray is present              ║
+║       • NEVER lean the tray vertically against a wall          ║
+║       • NEVER place the tray behind or beside the products     ║
+║       • NEVER show the tray standing upright                   ║
+║       • The tray is the BASE; everything else rests on it      ║
 ╚════════════════════════════════════════════════════════════════╝
 
 Products being composited (informational only — the attached images are the source of truth):
@@ -2520,7 +2936,7 @@ Style: warm cozy lighting, modern Saudi home aesthetic, soft natural light, neut
     if (gemini) {
       try {
         imageUrl = await generateWithGemini(geminiPrompt, items);
-        if (imageUrl) usedModel = 'gemini-3-pro-image-preview (Nano Banana Pro)';
+        if (imageUrl) usedModel = 'gemini-3.1-flash-image-preview (Nano Banana Flash 3.1)';
       } catch (err) {
         errors.push(`gemini: ${err.message}`);
         console.warn('Gemini failed:', err.message);
@@ -2575,26 +2991,58 @@ Style: warm cozy lighting, modern Saudi home aesthetic, soft natural light, neut
 // 📷 Visual Similarity Search — يستخدم image embeddings بدلاً من تحويل الصورة لنص
 app.post('/image-search', async (req, res) => {
   try {
-    const { image } = req.body;
+    const { image, userCropped } = req.body;
     if (!image || typeof image !== 'string' || !image.startsWith('data:image/')) {
       return res.status(400).json({ success: false, message: 'Valid image data URL required' });
     }
 
-    // 1️⃣ CLIP image embedding (بحث بصري حقيقي)
-    console.log('📷 CLIP embedding uploaded image...');
-    const queryEmbedding = await clipImageEmbedding(image);
+    // 🎯 لو المستخدم قصّ يدوياً: نستخدم embedding عادي ضد الحقل العادي فقط
+    // (الحقل focused في الكتالوج عبارة عن multi-region blend — paradigm mismatch مع crop نظيف)
+    // الكتالوج clip_image_embedding هو CLIP عادي لصورة المنتج الكاملة (استوديو)
+    // والـ crop اليدوي يحاكي نفس النمط → match مباشر
+    let knnConfig;
+    if (userCropped) {
+      console.log('📷 CLIP single embedding (user-cropped, plain field only)...');
+      const queryEmb = await clipImageEmbedding(image);
+      knnConfig = [
+        {
+          field: 'clip_image_embedding',
+          query_vector: queryEmb,
+          k: 30,
+          num_candidates: 300,
+          boost: 1.0,
+        },
+      ];
+    } else {
+      console.log('📷 CLIP dual embedding (full + focused multi-region)...');
+      const [queryFull, queryFocused] = await Promise.all([
+        clipImageEmbedding(image),
+        clipImageEmbeddingFocused(image),
+      ]);
+      knnConfig = [
+        {
+          field: 'clip_image_embedding',
+          query_vector: queryFull,
+          k: 30,
+          num_candidates: 200,
+          boost: 1.0,
+        },
+        {
+          field: 'clip_image_embedding_focused',
+          query_vector: queryFocused,
+          k: 30,
+          num_candidates: 200,
+          boost: 1.2,
+        },
+      ];
+    }
 
-    // 2️⃣ kNN على clip_image_embedding field — مقارنة بصرية مباشرة
+    // 2️⃣ kNN search
     const result = await esClient.search({
       index: INDEX_NAME,
       size: 30,
-      _source: ['title', 'image_link', 'price', 'sale_price', 'brand', 'link', 'color', 'size'],
-      knn: {
-        field: 'clip_image_embedding',
-        query_vector: queryEmbedding,
-        k: 30,
-        num_candidates: 200,
-      },
+      _source: ['title', 'image_link', 'price', 'sale_price', 'brand', 'link', 'color', 'size', 'product_kind'],
+      knn: knnConfig,
     });
 
     const products = result.hits.hits.map((hit) => {
@@ -2712,10 +3160,11 @@ app.get('/search', async (req, res) => {
 
   try {
     // 1+2+3. التصنيف + BGE embedding + CLIP text embedding بالتوازي
-    // CLIP يبحث في صور المنتجات نفسها (cross-modal text→image)
+    // 🎯 استخدم الـ subject المُنظّف للـ embeddings (يمنع color/material من تشويش kNN)
+    const embedSubject = extractSubject(query) || query;
     const clipTextPromise = (async () => {
       try {
-        const englishQuery = await translateForClip(query);
+        const englishQuery = await translateForClip(embedSubject);
         const emb = await clipTextEmbedding(englishQuery);
         return emb;
       } catch (e) {
@@ -2723,13 +3172,12 @@ app.get('/search', async (req, res) => {
         return null;
       }
     })();
-
     const [searchType, queryEmbedding, clipQueryVec] = await Promise.all([
       classifySearchType(query),
-      getQueryEmbedding(query),
+      getQueryEmbedding(embedSubject),
       clipTextPromise,
     ]);
-    console.log(`Search "${query}" classified as: ${searchType.type}${clipQueryVec ? ' | CLIP ✓' : ''}`);
+    console.log(`Search "${query}" → embed:"${embedSubject}" | type:${searchType.type}${clipQueryVec ? ' | CLIP ✓' : ''}`);
 
     // 3. Hybrid Search: BM25 (نص) + BGE-M3 (دلالي) + CLIP (بصري) — knn array
     // CLIP boost أعلى لأنه يميّز شكل المنتج (ثلاجة كبيرة vs ترمس صغير مسمّى ثلاجة)
@@ -2851,7 +3299,7 @@ app.get('/search', async (req, res) => {
     // 4. Filter accessories — صارم: درج/شنطة/نشاف ليست عناصر رئيسية
     {
       const before = products.length;
-      products = products.filter(p => !isAccessory(p.title, searchType.deviceKeyword));
+      products = products.filter(p => !isAccessory(p.title, searchType.deviceKeyword, query));
       if (products.length !== before) console.log(`Filtered accessories: ${before} → ${products.length}`);
     }
 
@@ -2869,9 +3317,37 @@ app.get('/search', async (req, res) => {
       const subject = extractSubject(query);
       if (subject) {
         const beforeCount = products.length;
-        const filtered = products.filter(p => titleMatchesSubject(p.title, subject));
-        products = filtered;
-        console.log(`🎯 Subject "${subject}": ${beforeCount} → ${products.length}`);
+        // 🎯 Scoring ذكي: كل منتج يحصل على score 0-1 حسب نسبة تطابق الكلمات
+        const scored = products.map(p => ({ p, score: scoreSubjectMatch(p.title, subject) }))
+                              .filter(x => x.score > 0);
+        scored.sort((a, b) => b.score - a.score);
+        const perfectMatches = scored.filter(x => x.score >= 0.999);
+        if (perfectMatches.length >= 3) {
+          products = perfectMatches.map(x => x.p);
+          console.log(`🎯 Subject "${subject}" (strict): ${beforeCount} → ${products.length}`);
+        } else if (scored.length > 0) {
+          products = scored.map(x => x.p);
+          console.log(`🎯 Subject "${subject}" (scored): ${beforeCount} → ${products.length}`);
+        } else {
+          products = [];
+          console.log(`🎯 Subject "${subject}": ${beforeCount} → 0`);
+        }
+      }
+
+      // 🎯 Kind-based reranking: ارفع المنتجات اللي product_kind يطابق نية البحث
+      // مثلاً "فرن" → appliance يطلع أولاً، cookware/accessory ينزل
+      const expectedKind = getExpectedKind(query);
+      if (expectedKind && products.length > 0) {
+        const matching = [];
+        const rest = [];
+        for (const p of products) {
+          if (p.product_kind === expectedKind) matching.push(p);
+          else rest.push(p);
+        }
+        if (matching.length > 0 && rest.length > 0) {
+          products = [...matching, ...rest];
+          console.log(`🎯 Kind "${expectedKind}": ${matching.length} matched, ${rest.length} demoted`);
+        }
       }
     }
 
@@ -2996,7 +3472,7 @@ app.get('/search', async (req, res) => {
           };
         });
         // طبّق نفس فلاتر النص الأصلي على النتائج الجديدة
-        let filteredCorr = corrProducts.filter(p => !isAccessory(p.title, searchType.deviceKeyword));
+        let filteredCorr = corrProducts.filter(p => !isAccessory(p.title, searchType.deviceKeyword, query));
         if (queryIsLargeAppliance(correctedQuery)) {
           filteredCorr = filteredCorr.filter(p => !isUndersizedForLargeAppliance(p.title));
         }
@@ -3059,6 +3535,7 @@ app.get('/search', async (req, res) => {
           brand: p.brand,
           image_link: p.image_link,
           link: p.link,
+          product_kind: p.product_kind,
         })), searchType.preferHomeElec),
         intentPromise,
         generateSmartFilters(intentQuery, products),
@@ -3156,7 +3633,7 @@ app.get('/search/ai', async (req, res) => {
     const result = await esClient.search({
       index: INDEX_NAME,
       size: 40,
-      _source: ['title', 'image_link', 'price', 'sale_price', 'brand', 'link', 'color', 'size'],
+      _source: ['title', 'image_link', 'price', 'sale_price', 'brand', 'link', 'color', 'size', 'product_kind'],
       query: {
         multi_match: {
           query,
@@ -3183,12 +3660,13 @@ app.get('/search/ai', async (req, res) => {
         link: hit._source.link,
         color: hit._source.color || '',
         size: hit._source.size || '',
+        product_kind: hit._source.product_kind,
       };
     });
 
     // فلاتر صارمة لـ AI summary — صارمة بدون fallback
     // (إذا فلتر يزرّع كل النتائج، نُرجع AI summary فاضي بدل اختيار من ضوضاء)
-    products = products.filter(p => !isAccessory(p.title, searchType.deviceKeyword));
+    products = products.filter(p => !isAccessory(p.title, searchType.deviceKeyword, query));
     if (queryIsLargeAppliance(query)) {
       products = products.filter(p => !isUndersizedForLargeAppliance(p.title));
     }
@@ -3197,6 +3675,19 @@ app.get('/search/ai', async (req, res) => {
       if (subject) {
         // ⚠️ صارم: لا fallback. لو 0 منتجات تطابق الـ subject، نُرجع 0 (أصدق من ضوضاء)
         products = products.filter(p => titleMatchesSubject(p.title, subject));
+      }
+    }
+    // 🎯 Kind-based filter لـ /search/ai (للتوصيات الذكية)
+    // لو "فرن" → نُبقي فقط appliance (يمنع زبدية فرن من الظهور كأرخص فرن)
+    {
+      const expectedKind = getExpectedKind(query);
+      if (expectedKind) {
+        const before = products.length;
+        const matching = products.filter(p => p.product_kind === expectedKind);
+        if (matching.length >= 3) {
+          products = matching;
+          console.log(`🎯 AI Kind "${expectedKind}": ${before} → ${products.length}`);
+        }
       }
     }
     // 🔧 فلتر المُحدِّدات (كهربائية/يدوية/إستيل/زجاج/خشبي/بخار…)
@@ -3225,9 +3716,11 @@ app.get('/search/ai', async (req, res) => {
         ? { isAmbiguous: true, message: 'هل تقصد أحد هذي:', suggestions: corr }
         : { isAmbiguous: false, message: '', suggestions: [] };
     } else {
-      intentResolved = getDictionaryIntent(effectiveQuery) || getStatisticalIntent(effectiveQuery, products) || null;
+      const rawIntent = getDictionaryIntent(effectiveQuery) || getStatisticalIntent(effectiveQuery, products) || null;
+      // Catalog validation: تأكد كل اقتراح يطابق 3+ منتجات
+      intentResolved = rawIntent ? await validateIntentSuggestions(rawIntent, effectiveQuery) : null;
     }
-    const intentPromise = intentResolved
+    const intentPromise = intentResolved && intentResolved.suggestions && intentResolved.suggestions.length >= 2
       ? Promise.resolve(intentResolved)
       : detectIntent(effectiveQuery, products);
 
