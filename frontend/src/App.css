@@ -2737,59 +2737,77 @@ body {
 /* ============================== */
 /* 🔧 DEVELOPER MODE PANEL        */
 /* ============================== */
+/* 🎯 Side tab — vertical strip pinned to left edge of viewport */
 .dev-mode {
-  position: relative;
-  margin: 0 auto 1.5rem;
-  max-width: 1100px;
-  z-index: 50;
+  position: fixed;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+  z-index: 9000;
+  display: flex;
+  align-items: stretch;
+  font-family: 'Segoe UI', Tahoma, sans-serif;
 }
+
 .dev-mode-toggle {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 0.5rem;
-  width: 100%;
-  padding: 0.65rem 1rem;
-  background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+  padding: 1.2rem 0.45rem;
+  background: linear-gradient(180deg, #1e293b 0%, #334155 100%);
   color: #e2e8f0;
   border: 1px solid #475569;
-  border-radius: 10px;
+  border-left: none;
+  border-radius: 0 10px 10px 0;
   cursor: pointer;
-  font-family: 'Segoe UI', Tahoma, sans-serif;
-  font-size: 0.9rem;
+  font-size: 0.78rem;
   transition: all 0.2s ease;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  /* vertical-rl reads top→bottom; flip so text reads bottom→top (more natural) */
+  transform: rotate(180deg);
+  min-height: 180px;
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.15);
 }
-.dev-mode-toggle:hover { background: linear-gradient(135deg, #334155 0%, #475569 100%); }
-.dev-mode-icon { font-size: 1.1rem; }
-.dev-mode-label { font-weight: 600; letter-spacing: 0.5px; }
+.dev-mode-toggle:hover {
+  background: linear-gradient(180deg, #334155 0%, #475569 100%);
+  padding-inline: 0.55rem;
+}
+.dev-mode-icon { font-size: 1rem; }
+.dev-mode-label { font-weight: 600; letter-spacing: 1px; }
 .dev-mode-status {
-  margin-inline-start: auto;
-  padding: 0.15rem 0.6rem;
+  padding: 0.15rem 0.5rem;
   background: rgba(34, 197, 94, 0.18);
   color: #4ade80;
-  border-radius: 999px;
+  border-radius: 4px;
   font-family: 'Consolas', 'Monaco', monospace;
-  font-size: 0.75rem;
+  font-size: 0.68rem;
+  writing-mode: horizontal-tb;
 }
-.dev-mode-chevron { font-size: 0.85rem; color: #94a3b8; }
+.dev-mode-chevron { font-size: 0.75rem; color: #94a3b8; }
 
-.dev-mode-open .dev-mode-toggle {
-  border-radius: 10px 10px 0 0;
-  border-bottom: none;
-}
-
+/* Panel slides out as a drawer from the LEFT */
 .dev-mode-panel {
+  position: fixed;
+  top: 50%;
+  left: 38px; /* width of the toggle */
+  transform: translateY(-50%);
+  width: min(720px, calc(100vw - 60px));
+  max-height: 88vh;
   background: #0f172a;
   color: #cbd5e1;
   border: 1px solid #475569;
-  border-top: none;
-  border-radius: 0 0 10px 10px;
-  padding: 0;
-  font-family: 'Segoe UI', Tahoma, sans-serif;
+  border-radius: 10px;
   font-size: 0.85rem;
   line-height: 1.55;
-  max-height: 75vh;
   overflow-y: auto;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  box-shadow: 8px 12px 30px rgba(0, 0, 0, 0.45);
+  z-index: 9001;
+}
+
+.dev-mode-open .dev-mode-toggle {
+  background: linear-gradient(180deg, #334155 0%, #475569 100%);
 }
 
 .dev-tabs {
@@ -3076,7 +3094,18 @@ body {
 }
 
 @media (max-width: 768px) {
-  .dev-mode { margin-inline: 0.5rem; }
+  /* Keep side-tab positioning, just shrink the toggle and panel */
+  .dev-mode-toggle {
+    padding: 1rem 0.4rem;
+    font-size: 0.72rem;
+    min-height: 150px;
+  }
+  .dev-mode-panel {
+    left: 32px;
+    width: calc(100vw - 48px);
+    max-height: 82vh;
+    font-size: 0.78rem;
+  }
   .dev-tabs { overflow-x: auto; }
   .dev-tab { white-space: nowrap; }
   .dev-stack { grid-template-columns: 1fr; }
