@@ -7,22 +7,37 @@ export default function TansiqDevMode({
   composedImage,
   composedModel,
   composeDuration,
+  composeTrace = null,
   flowName = 'Multi-row Tansiq',
 }) {
   const [expanded, setExpanded] = useState(false)
   const [pinned, setPinned] = useState(false)
-  const [activeTab, setActiveTab] = useState('pipeline')
+  const [activeTab, setActiveTab] = useState('trace')
 
   const open = expanded || pinned
   const hasCompose = !!composedImage
   const composeFailed = !composing && composedModel === null && selectedCount > 0 && !hasCompose
 
   const tabs = [
+    { id: 'trace', label: '⚡ Live Trace' },
     { id: 'pipeline', label: '🎨 Compose Pipeline' },
     { id: 'api', label: '📡 API' },
     { id: 'models', label: '⚙️ Image Models' },
     { id: 'stack', label: '🚀 Stack' },
   ]
+
+  const STAGE_LABELS = {
+    received: '📥 Request Received',
+    gemini_attempt: '🍌 Gemini (Nano Banana) — attempting',
+    gemini_success: '✅ Gemini succeeded',
+    gemini_failed: '❌ Gemini failed',
+    openai_fallback_attempt: '🔁 OpenAI fallback — attempting',
+    openai_fallback_success: '✅ OpenAI fallback succeeded',
+    openai_fallback_failed: '❌ OpenAI fallback failed',
+    all_failed: '🚨 ALL models failed',
+    done: '🎉 Done — image returned',
+    error: '💥 Endpoint error',
+  }
 
   const stageStatus = (done, active = false) => {
     if (active) return 'pending'
@@ -73,6 +88,69 @@ export default function TansiqDevMode({
               </button>
             ))}
           </div>
+
+          {/* === LIVE TRACE === */}
+          {activeTab === 'trace' && (
+            <div className="dev-section">
+              <div className="dev-section-title">
+                Live trace of the most recent compose request
+                {composeTrace && composeTrace.length > 0 && (
+                  <span style={{ marginLeft: '0.5rem', fontSize: '0.7rem', color: '#94a3b8' }}>
+                    · {composeTrace.length} step{composeTrace.length === 1 ? '' : 's'}
+                    {composeDuration != null && <> · total {(composeDuration / 1000).toFixed(2)}s</>}
+                  </span>
+                )}
+              </div>
+
+              {(!composeTrace || composeTrace.length === 0) && (
+                <div style={{ padding: '1.25rem', textAlign: 'center', color: '#94a3b8', background: '#0f172a', borderRadius: '6px' }}>
+                  {composing
+                    ? '⏳ Generating… trace will appear when the backend finishes.'
+                    : 'Compose an image to see the live backend trace here.'}
+                </div>
+              )}
+
+              {composeTrace && composeTrace.length > 0 && (
+                <ol className="dev-stages">
+                  {composeTrace.map((step, i) => {
+                    const next = composeTrace[i + 1]
+                    const stepMs = next ? next.t - step.t : null
+                    const isError = step.stage === 'gemini_failed'
+                      || step.stage === 'openai_fallback_failed'
+                      || step.stage === 'all_failed'
+                      || step.stage === 'error'
+                    const isSuccess = step.stage === 'done'
+                      || step.stage === 'gemini_success'
+                      || step.stage === 'openai_fallback_success'
+                    const cls = isError ? 'failed' : (isSuccess ? 'done' : 'idle')
+                    return (
+                      <li key={i} className={`dev-stage stage-${cls}`}>
+                        <div className="dev-stage-head">
+                          <span className="dev-stage-num">{i + 1}</span>
+                          <span className="dev-stage-name">{STAGE_LABELS[step.stage] || step.stage}</span>
+                          <span className="dev-stage-info">
+                            <code>t+{step.t}ms</code>
+                            {stepMs != null && <> · <code>+{stepMs}ms</code></>}
+                            {step.ms != null && <> · stage <code>{step.ms}ms</code></>}
+                          </span>
+                        </div>
+                        <div className="dev-stage-desc">
+                          {step.model && <div><strong>model:</strong> <code>{step.model}</code></div>}
+                          {step.count != null && <div><strong>products:</strong> {step.count}</div>}
+                          {Array.isArray(step.titles) && step.titles.length > 0 && (
+                            <div><strong>titles:</strong> {step.titles.map((t, j) => <code key={j} style={{ marginRight: '0.35rem' }}>{t}</code>)}</div>
+                          )}
+                          {step.error && <div style={{ color: '#fca5a5' }}><strong>error:</strong> {step.error}</div>}
+                          {step.errors != null && <div><strong>errors:</strong> {step.errors}</div>}
+                          {step.message && <div style={{ color: '#fca5a5' }}><strong>message:</strong> {step.message}</div>}
+                        </div>
+                      </li>
+                    )
+                  })}
+                </ol>
+              )}
+            </div>
+          )}
 
           {/* === PIPELINE === */}
           {activeTab === 'pipeline' && (

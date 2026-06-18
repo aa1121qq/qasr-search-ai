@@ -137,6 +137,8 @@ function App() {
   // 🔧 Tansiq compose timing
   const [tansiqComposeDuration, setTansiqComposeDuration] = useState(null)
   const [pageTansiqComposeDuration, setPageTansiqComposeDuration] = useState(null)
+  const [tansiqComposeTrace, setTansiqComposeTrace] = useState(null)
+  const [pageTansiqComposeTrace, setPageTansiqComposeTrace] = useState(null)
 
   // Mode switch (الصفحة الافتراضية = تنسيقات السريع AI)
   const [mode, setMode] = useState('page-tansiq') // 'search' | 'tansiq' | 'page-tansiq'
@@ -354,12 +356,14 @@ function App() {
     setPageTansiqComposedImage(null)
     setPageTansiqComposedModel(null)
     setPageTansiqComposeDuration(null)
+    setPageTansiqComposeTrace(null)
     const t0 = Date.now()
     try {
       const res = await axios.post(`${API_URL}/tansiq-compose`, { products: all })
       setPageTansiqComposedImage(res.data.imageUrl)
       setPageTansiqComposedModel(res.data.model || null)
       setPageTansiqComposeDuration(Date.now() - t0)
+      setPageTansiqComposeTrace(res.data.debug?.trace || null)
       // 📊 fire-and-forget analytics
       axios.post(`${API_URL}/track/tansiq`, {
         products: all.map(p => ({ id: p.mpn || p.id, title: p.title, link: p.link })),
@@ -368,6 +372,7 @@ function App() {
     } catch (err) {
       setPageTansiqError('فشل توليد الصورة: ' + (err.response?.data?.message || err.message))
       setPageTansiqComposeDuration(Date.now() - t0)
+      setPageTansiqComposeTrace(err.response?.data?.debug?.trace || null)
     } finally {
       setPageTansiqComposing(false)
     }
@@ -413,6 +418,7 @@ function App() {
     setTansiqComposedImage(null)
     setTansiqComposedModel(null)
     setTansiqComposeDuration(null)
+    setTansiqComposeTrace(null)
     const t0 = Date.now()
     try {
       const res = await axios.post(`${API_URL}/tansiq-compose`, {
@@ -421,6 +427,7 @@ function App() {
       setTansiqComposedImage(res.data.imageUrl)
       setTansiqComposedModel(res.data.model || null)
       setTansiqComposeDuration(Date.now() - t0)
+      setTansiqComposeTrace(res.data.debug?.trace || null)
       // 📊 fire-and-forget analytics
       axios.post(`${API_URL}/track/tansiq`, {
         products: tansiqSelected.map(p => ({ id: p.mpn || p.id, title: p.title, link: p.link })),
@@ -429,6 +436,7 @@ function App() {
     } catch (err) {
       setTansiqError('فشل توليد الصورة: ' + (err.response?.data?.message || err.message))
       setTansiqComposeDuration(Date.now() - t0)
+      setTansiqComposeTrace(err.response?.data?.debug?.trace || null)
     } finally {
       setTansiqComposing(false)
     }
@@ -832,6 +840,7 @@ function App() {
             composedImage={tansiqComposedImage}
             composedModel={tansiqComposedModel}
             composeDuration={tansiqComposeDuration}
+            composeTrace={tansiqComposeTrace}
             flowName="Multi-row Tansiq"
           />
         }
@@ -862,6 +871,7 @@ function App() {
             composedImage={pageTansiqComposedImage}
             composedModel={pageTansiqComposedModel}
             composeDuration={pageTansiqComposeDuration}
+            composeTrace={pageTansiqComposeTrace}
             flowName="Product Page Tansiq (locked product + extras)"
           />
         }

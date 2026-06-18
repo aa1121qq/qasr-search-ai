@@ -2808,6 +2808,11 @@ async function generateWithGemini(prompt, items) {
 
 // توليد صورة تنسيق منزلي للمنتجات المختارة (تصميم في بيت)
 app.post('/tansiq-compose', async (req, res) => {
+  const traceT0 = Date.now();
+  const composeTrace = [];
+  const trace = (stage, info = {}) => {
+    composeTrace.push({ stage, t: Date.now() - traceT0, ...info });
+  };
   try {
     const { products = [] } = req.body;
     if (!Array.isArray(products) || products.length === 0) {
@@ -2815,6 +2820,7 @@ app.post('/tansiq-compose', async (req, res) => {
     }
 
     const items = products.slice(0, 3);
+    trace('received', { count: items.length, titles: items.map(p => (p.title || '').slice(0, 40)) });
 
     const itemsDescription = items
       .map((p, i) => `${i + 1}. ${p.title || ''}${p.color ? ` (color: ${p.color})` : ''}${p.size ? ` (size: ${p.size})` : ''}`)
@@ -2934,12 +2940,18 @@ Style: warm cozy lighting, modern Saudi home aesthetic, soft natural light, neut
 
     // 1) Try Gemini Nano Banana (best — accepts real product images)
     if (gemini) {
+      const tGem = Date.now();
+      trace('gemini_attempt', { model: 'gemini-3.1-flash-image-preview' });
       try {
         imageUrl = await generateWithGemini(geminiPrompt, items);
-        if (imageUrl) usedModel = 'gemini-3.1-flash-image-preview (Nano Banana Flash 3.1)';
+        if (imageUrl) {
+          usedModel = 'gemini-3.1-flash-image-preview (Nano Banana Flash 3.1)';
+          trace('gemini_success', { ms: Date.now() - tGem });
+        }
       } catch (err) {
         errors.push(`gemini: ${err.message}`);
         console.warn('Gemini failed:', err.message);
+        trace('gemini_failed', { error: err.message.slice(0, 80), ms: Date.now() - tGem });
       }
     }
 
@@ -2963,28 +2975,39 @@ Style: warm cozy lighting, modern Saudi home aesthetic, soft natural light, neut
       ];
 
       for (const { model, params } of openaiAttempts) {
+        const tFb = Date.now();
+        trace('openai_fallback_attempt', { model });
         try {
           imageUrl = await tryOpenAI(model, params);
-          if (imageUrl) { usedModel = model; break; }
+          if (imageUrl) {
+            usedModel = model;
+            trace('openai_fallback_success', { model, ms: Date.now() - tFb });
+            break;
+          }
         } catch (err) {
           errors.push(`${model}: ${err.message}`);
+          trace('openai_fallback_failed', { model, error: err.message.slice(0, 80), ms: Date.now() - tFb });
         }
       }
     }
 
     if (!imageUrl) {
+      trace('all_failed', { errors: errors.length });
       return res.status(500).json({
         success: false,
         message: 'Image generation failed for all models',
         errors,
+        debug: { trace: composeTrace, totalMs: Date.now() - traceT0 },
       });
     }
 
     console.log(`🎨 Tansiq composed with ${usedModel}: ${items.length} products`);
-    res.json({ success: true, imageUrl, model: usedModel });
+    trace('done', { model: usedModel, ms: Date.now() - traceT0 });
+    res.json({ success: true, imageUrl, model: usedModel, debug: { trace: composeTrace, totalMs: Date.now() - traceT0 } });
   } catch (error) {
     console.error('Tansiq compose error:', error.message);
-    res.status(500).json({ success: false, message: 'Image generation failed', error: error.message });
+    trace('error', { message: error.message.slice(0, 100) });
+    res.status(500).json({ success: false, message: 'Image generation failed', error: error.message, debug: { trace: composeTrace, totalMs: Date.now() - traceT0 } });
   }
 });
 
