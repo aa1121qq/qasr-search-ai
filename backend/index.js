@@ -3101,6 +3101,13 @@ app.get('/search', async (req, res) => {
   const limit = parseInt(req.query.limit) || 500;
   const skipIntent = req.query.skipIntent === 'true';
   const skipAI = req.query.skipAI === 'true';  // إذا true: نتخطى ميزات الـ AI (ملخص/intent/filters/related/didYouMean)
+  const wantDebug = req.query.debug === '1' || req.query.debug === 'true';
+  const debugTrace = wantDebug ? [] : null;
+  const traceT0 = wantDebug ? Date.now() : 0;
+  const trace = (stage, info = {}) => {
+    if (!wantDebug) return;
+    debugTrace.push({ stage, t: Date.now() - traceT0, ...info });
+  };
 
   // 🆕 Hard filters (من الـ catalog tagging)
   const filterKind = req.query.kind ? String(req.query.kind).toLowerCase().trim() : null;
@@ -3178,6 +3185,7 @@ app.get('/search', async (req, res) => {
       clipTextPromise,
     ]);
     console.log(`Search "${query}" → embed:"${embedSubject}" | type:${searchType.type}${clipQueryVec ? ' | CLIP ✓' : ''}`);
+    trace('classify', { query, subject: embedSubject, type: searchType.type, hasCLIP: !!clipQueryVec });
 
     // 3. Hybrid Search: BM25 (نص) + BGE-M3 (دلالي) + CLIP (بصري) — knn array
     // CLIP boost أعلى لأنه يميّز شكل المنتج (ثلاجة كبيرة vs ترمس صغير مسمّى ثلاجة)
@@ -3300,7 +3308,10 @@ app.get('/search', async (req, res) => {
     {
       const before = products.length;
       products = products.filter(p => !isAccessory(p.title, searchType.deviceKeyword, query));
-      if (products.length !== before) console.log(`Filtered accessories: ${before} → ${products.length}`);
+      if (products.length !== before) {
+        console.log(`Filtered accessories: ${before} → ${products.length}`);
+        trace('accessory_filter', { before, after: products.length });
+      }
     }
 
     // 4.1. لو البحث عن جهاز كبير (ثلاجة/غسالة/فرن…)، نستبعد الترامس الصغيرة دائماً
@@ -3325,12 +3336,15 @@ app.get('/search', async (req, res) => {
         if (perfectMatches.length >= 3) {
           products = perfectMatches.map(x => x.p);
           console.log(`🎯 Subject "${subject}" (strict): ${beforeCount} → ${products.length}`);
+          trace('subject_filter', { subject, mode: 'strict', before: beforeCount, after: products.length });
         } else if (scored.length > 0) {
           products = scored.map(x => x.p);
           console.log(`🎯 Subject "${subject}" (scored): ${beforeCount} → ${products.length}`);
+          trace('subject_filter', { subject, mode: 'scored', before: beforeCount, after: products.length });
         } else {
           products = [];
           console.log(`🎯 Subject "${subject}": ${beforeCount} → 0`);
+          trace('subject_filter', { subject, mode: 'zero', before: beforeCount, after: 0 });
         }
       }
 
@@ -3347,6 +3361,7 @@ app.get('/search', async (req, res) => {
         if (matching.length > 0 && rest.length > 0) {
           products = [...matching, ...rest];
           console.log(`🎯 Kind "${expectedKind}": ${matching.length} matched, ${rest.length} demoted`);
+          trace('kind_rerank', { kind: expectedKind, matching: matching.length, demoted: rest.length });
         }
       }
     }
@@ -3563,6 +3578,10 @@ app.get('/search', async (req, res) => {
       relatedSearches: relatedSearches,
       didYouMean: didYouMean,
     };
+    if (wantDebug) {
+      trace('response_ready', { totalProducts: finalResponse.products?.length || 0, topTitle: finalResponse.products?.[0]?.title?.slice(0, 60) });
+      finalResponse.debug = { trace: debugTrace, totalMs: Date.now() - traceT0 };
+    }
     responseCache.set(responseCacheKey, finalResponse);
     // 📊 Log queries with few results (catalog gaps)
     logQuery(query, products.length, { searchType: searchType.type, total: result.hits.total.value });
