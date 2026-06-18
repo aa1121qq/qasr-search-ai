@@ -17,6 +17,8 @@ export default function DeveloperMode({ devInfo, loading, loadingAI, apiUrl }) {
   const didYouMean = devInfo?.didYouMean
   const intentAmbiguous = devInfo?.intentAmbiguous
   const hasData = devInfo && devInfo.query
+  const trace = devInfo?.trace || null
+  const topProductTitle = devInfo?.topProductTitle
 
   const stageStatus = (done) => {
     if (loading && !done) return 'pending'
@@ -25,6 +27,7 @@ export default function DeveloperMode({ devInfo, loading, loadingAI, apiUrl }) {
   }
 
   const tabs = [
+    { id: 'live', label: '⚡ Live Trace' },
     { id: 'pipeline', label: '🔍 Pipeline' },
     { id: 'api', label: '📡 API' },
     { id: 'stack', label: '🚀 Stack' },
@@ -61,6 +64,67 @@ export default function DeveloperMode({ devInfo, loading, loadingAI, apiUrl }) {
               </button>
             ))}
           </div>
+
+          {/* === LIVE TRACE === */}
+          {activeTab === 'live' && (
+            <div className="dev-section">
+              <div className="dev-section-title">
+                ⚡ Live Pipeline Trace {hasData && <span style={{ color: '#94a3b8', fontWeight: 'normal', fontSize: '0.85rem' }}>— for "{devInfo.query}"</span>}
+              </div>
+              {!hasData ? (
+                <div className="dev-empty">Run a search to see the live execution path.</div>
+              ) : !trace ? (
+                <div className="dev-empty">Trace not available (cached response or backend trace disabled).</div>
+              ) : (
+                <>
+                  {topProductTitle && (
+                    <div style={{ background: '#0f172a', padding: '0.6rem 0.9rem', borderRadius: 6, marginBottom: '0.8rem', borderLeft: '3px solid #22c55e' }}>
+                      <div style={{ color: '#94a3b8', fontSize: '0.75rem' }}>top result</div>
+                      <div style={{ color: '#e2e8f0', fontWeight: 600, fontSize: '0.85rem' }}>{topProductTitle}</div>
+                    </div>
+                  )}
+                  <ol className="dev-stages" style={{ position: 'relative' }}>
+                    {trace.map((step, i) => {
+                      const stageLabels = {
+                        classify: '🎯 Query Classification',
+                        accessory_filter: '🚫 Accessory Filter',
+                        subject_filter: '📌 Subject Filter',
+                        kind_rerank: '🏷️ Kind-based Rerank',
+                        response_ready: '✅ Response Ready',
+                      }
+                      const label = stageLabels[step.stage] || step.stage
+                      const detail = Object.entries(step).filter(([k]) => !['stage','t'].includes(k))
+                      return (
+                        <li key={i} className="dev-stage stage-done">
+                          <div className="dev-stage-head">
+                            <span className="dev-stage-num">{i + 1}</span>
+                            <span className="dev-stage-name">{label}</span>
+                            <span className="dev-stage-info">
+                              <code>{step.t}ms</code>
+                            </span>
+                          </div>
+                          <div className="dev-stage-desc">
+                            {detail.map(([k, v]) => (
+                              <span key={k} style={{ marginRight: '1rem' }}>
+                                <span style={{ color: '#94a3b8' }}>{k}:</span>{' '}
+                                <code>{typeof v === 'object' ? JSON.stringify(v) : String(v).slice(0, 60)}</code>
+                              </span>
+                            ))}
+                          </div>
+                        </li>
+                      )
+                    })}
+                  </ol>
+                  {devInfo?.fastDuration != null && (
+                    <div style={{ marginTop: '0.8rem', color: '#94a3b8', fontSize: '0.8rem' }}>
+                      Total end-to-end: <code style={{ color: '#38bdf8' }}>{devInfo.fastDuration}ms</code>
+                      {' '}(includes network round-trip)
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
 
           {/* === PIPELINE === */}
           {activeTab === 'pipeline' && (

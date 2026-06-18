@@ -224,8 +224,9 @@ function App() {
     const tAiStart = Date.now()
 
     // 1) المنتجات + intent (سريع، بدون LLM) — نظهرها فوراً
+    // debug=1 يجلب pipeline trace للـ Developer Mode
     const fastPromise = axios.get(`${API_URL}/search`, {
-      params: { q: searchQuery, limit: 500, skipAI: 'true', skipIntent: skipIntent ? 'true' : 'false' },
+      params: { q: searchQuery, limit: 500, skipAI: 'true', skipIntent: skipIntent ? 'true' : 'false', debug: '1' },
     }).then(response => {
       const fastDuration = Date.now() - tFastStart
       setAllProducts(response.data.products || [])
@@ -245,6 +246,9 @@ function App() {
         brandsCount: (response.data.filters?.brands || []).length,
         intentAmbiguous: !!response.data.intent?.isAmbiguous,
         fastDuration,
+        // 🔬 Live pipeline trace from backend (per-query execution path)
+        trace: response.data.debug?.trace || null,
+        topProductTitle: response.data.products?.[0]?.title || null,
       }))
       setLoading(false)
     }).catch(err => {
