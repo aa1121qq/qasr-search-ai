@@ -158,8 +158,11 @@ function App() {
   // مشروع تنسيقات صفحة المنتج state
   const [pageTansiqExpanded, setPageTansiqExpanded] = useState(false)
   const [pageTansiqRows, setPageTansiqRows] = useState([
-    { id: 1, label: 'بيالات وفناجين', queries: ['بيالات', 'فناجيل'], allProducts: [], selectedColor: null, loading: false, hasFetched: false, error: '' },
-    { id: 2, label: 'طوفرية', queries: ['طوفرية'], allProducts: [], selectedColor: null, loading: false, hasFetched: false, error: '' },
+    { id: 1, label: 'بيالات وفناجين', queries: ['بيالات', 'فناجيل'], allProducts: [], selectedColor: null, loading: false, hasFetched: false, error: '', open: false },
+    { id: 2, label: 'طوفرية', queries: ['طوفرية'], allProducts: [], selectedColor: null, loading: false, hasFetched: false, error: '', open: false },
+    { id: 3, label: 'التمريات', queries: ['تمرية', 'تمريات'], allProducts: [], selectedColor: null, loading: false, hasFetched: false, error: '', open: false },
+    // المباخر العادية فقط — تُستبعد الكهربائية
+    { id: 4, label: 'المباخر', queries: ['مبخرة', 'مباخر'], exclude: /كهرب|شاحن|usb|يو ?اس ?بي|بطاري|لاسلكي/i, allProducts: [], selectedColor: null, loading: false, hasFetched: false, error: '', open: false },
   ])
   const [pageTansiqSelected, setPageTansiqSelected] = useState([])
   const [pageTansiqComposing, setPageTansiqComposing] = useState(false)
@@ -315,7 +318,9 @@ function App() {
       for (const res of results) {
         for (const p of (res.data.products || [])) {
           const key = p.link || p.mpn || p.title
-          if (key && !seen.has(key)) { seen.add(key); merged.push(p) }
+          if (!key || seen.has(key)) continue
+          if (row.exclude && row.exclude.test(p.title || '')) continue
+          seen.add(key); merged.push(p)
         }
       }
       setPageTansiqRows(prev => prev.map(r => r.id === rowId
@@ -326,6 +331,15 @@ function App() {
         ? { ...r, loading: false, error: 'فشل: ' + (err.response?.data?.message || err.message) }
         : r))
     }
+  }
+
+  // 🔽 درب-لست: فتح/إغلاق القسم — ويجلب المنتجات تلقائياً أول مرة يُفتح فيها
+  const togglePageTansiqRow = (rowId) => {
+    const row = pageTansiqRows.find(r => r.id === rowId)
+    if (!row) return
+    const willOpen = !row.open
+    setPageTansiqRows(prev => prev.map(r => r.id === rowId ? { ...r, open: willOpen } : r))
+    if (willOpen && !row.hasFetched && !row.loading) fetchPageTansiqRow(rowId)
   }
 
   const setPageTansiqColorFilter = (rowId, color) => {
@@ -884,7 +898,7 @@ function App() {
         composedModel={pageTansiqComposedModel}
         error={pageTansiqError}
         onToggleExpand={() => setPageTansiqExpanded(!pageTansiqExpanded)}
-        onFetchRow={fetchPageTansiqRow}
+        onToggleRow={togglePageTansiqRow}
         onSelectColor={setPageTansiqColorFilter}
         onDrop={handlePageDrop}
         onRemove={handlePageRemove}
@@ -1366,7 +1380,7 @@ function TansiqRow({ row, defaultPlaceholder, onSearch, onQueryChange, onDragSta
 
 function PageTansiqProject({
   modeSwitch, devMode, lockedProduct, rows, expanded, selected, composing, composedImage, composedModel, error,
-  onToggleExpand, onFetchRow, onSelectColor, onDrop, onRemove, onCompose,
+  onToggleExpand, onToggleRow, onSelectColor, onDrop, onRemove, onCompose,
 }) {
   const [dragOver, setDragOver] = useState(false)
   const [cartAdded, setCartAdded] = useState(false)
@@ -1510,7 +1524,7 @@ function PageTansiqProject({
                       key={row.id}
                       row={row}
                       thermosColor={lockedProduct.color}
-                      onFetch={() => onFetchRow(row.id)}
+                      onToggle={() => onToggleRow(row.id)}
                       onSelectColor={(c) => onSelectColor(row.id, c)}
                       onDragStart={handleDragStart}
                       onMobileSelect={handleMobileSelect}
@@ -1614,26 +1628,31 @@ function PageTansiqProject({
   )
 }
 
-function PageTansiqRow({ row, thermosColor, onFetch, onSelectColor, onDragStart, onMobileSelect }) {
+function PageTansiqRow({ row, thermosColor, onToggle, onSelectColor, onDragStart, onMobileSelect }) {
   const colors = [...new Set(row.allProducts.map(p => p.color).filter(c => c && c.trim()))]
   const filteredProducts = row.selectedColor
     ? row.allProducts.filter(p => p.color === row.selectedColor)
     : row.allProducts
 
   return (
-    <div className="page-tansiq-row">
-      <div className="page-tansiq-row-head">
-        <h4>🔍 {row.label}</h4>
-        <button
-          className="page-tansiq-row-fetch"
-          onClick={onFetch}
-          disabled={row.loading}
-        >
-          {row.loading ? '⏳ جاري الجلب...' : (row.hasFetched ? 'إعادة الجلب' : 'جلب المنتجات')}
-        </button>
-      </div>
+    <div className={`page-tansiq-row ${row.open ? 'open' : ''}`}>
+      <button
+        type="button"
+        className="page-tansiq-row-head"
+        onClick={onToggle}
+        aria-expanded={row.open}
+      >
+        <h4>{row.label}</h4>
+        <span className="page-tansiq-row-head-right">
+          {row.loading && <span className="page-tansiq-row-loading">⏳ جاري التحميل…</span>}
+          {!row.loading && row.hasFetched && (
+            <span className="page-tansiq-row-count">{row.allProducts.length}</span>
+          )}
+          <span className="page-tansiq-row-caret">▾</span>
+        </span>
+      </button>
 
-      {row.hasFetched && colors.length > 0 && (
+      {row.open && row.hasFetched && colors.length > 0 && (
         <div className="page-tansiq-color-filter">
           <span className="page-tansiq-color-question">
             🎨 أي لون يناسب الترمس{thermosColor ? ` (${thermosColor})` : ''}؟
@@ -1660,9 +1679,9 @@ function PageTansiqRow({ row, thermosColor, onFetch, onSelectColor, onDragStart,
         </div>
       )}
 
-      {row.error && <div className="error" style={{ marginTop: '0.5rem' }}>{row.error}</div>}
+      {row.open && row.error && <div className="error" style={{ marginTop: '0.5rem' }}>{row.error}</div>}
 
-      {filteredProducts.length > 0 && (
+      {row.open && filteredProducts.length > 0 && (
         <div className="page-tansiq-row-products">
           {filteredProducts.map((p, i) => (
             <div
@@ -1701,7 +1720,7 @@ function PageTansiqRow({ row, thermosColor, onFetch, onSelectColor, onDragStart,
         </div>
       )}
 
-      {row.hasFetched && filteredProducts.length === 0 && !row.loading && (
+      {row.open && row.hasFetched && filteredProducts.length === 0 && !row.loading && (
         <div className="page-tansiq-row-empty">
           {row.selectedColor ? `لا توجد منتجات بلون "${row.selectedColor}"` : 'لا توجد نتائج'}
         </div>

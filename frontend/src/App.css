@@ -1210,34 +1210,70 @@ body {
   padding-top: 1rem;
 }
 
+/* 🔽 رأس القسم = درب-لست قابل للطي */
 .page-tansiq-row-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
   margin-bottom: 0.6rem;
+  padding: 0.7rem 0.9rem;
+  background: #F9FAFB;
+  border: 1px solid #E5E7EB;
+  border-radius: 10px;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: right;
+  transition: all 0.18s ease;
 }
+.page-tansiq-row-head:hover {
+  background: #F3F4F6;
+  border-color: #C7D2FE;
+}
+.page-tansiq-row.open > .page-tansiq-row-head {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-color: transparent;
+}
+.page-tansiq-row.open > .page-tansiq-row-head h4,
+.page-tansiq-row.open > .page-tansiq-row-head .page-tansiq-row-caret,
+.page-tansiq-row.open > .page-tansiq-row-head .page-tansiq-row-loading { color: #fff; }
+
 .page-tansiq-row-head h4 {
   margin: 0;
   font-size: 1rem;
+  font-weight: 700;
   color: #1F2937;
 }
 
-.page-tansiq-row-fetch {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  border: none;
-  padding: 0.5rem 1.1rem;
-  border-radius: 8px;
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s ease;
+.page-tansiq-row-head-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
-.page-tansiq-row-fetch:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+.page-tansiq-row-loading { font-size: 0.8rem; color: #6B7280; }
+.page-tansiq-row-count {
+  background: #E0E7FF;
+  color: #4338CA;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  min-width: 1.5rem;
+  text-align: center;
 }
-.page-tansiq-row-fetch:disabled { opacity: 0.6; cursor: not-allowed; }
+.page-tansiq-row.open > .page-tansiq-row-head .page-tansiq-row-count {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+.page-tansiq-row-caret {
+  font-size: 0.9rem;
+  color: #6B7280;
+  transition: transform 0.2s ease;
+}
+.page-tansiq-row.open > .page-tansiq-row-head .page-tansiq-row-caret {
+  transform: rotate(180deg);
+}
 
 .page-tansiq-color-filter {
   background: #F9FAFB;
