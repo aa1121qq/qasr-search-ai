@@ -15,6 +15,10 @@ const THIRD_AFTER = 24
 const RELATED_AFTER = 32
 
 // منتج ثابت في مشروع تنسيقات صفحة المنتج
+// صندوق تنسيق صفحة المنتج: إجمالي الخانات (الأولى مقفلة على منتج الصفحة)
+const PAGE_TANSIQ_SLOTS = 5
+const PAGE_TANSIQ_DROPPABLE = PAGE_TANSIQ_SLOTS - 1
+
 const LOCKED_PRODUCT = {
   id: 'TL-RGB02-08',
   mpn: 'TL-RGB02-08',
@@ -350,7 +354,7 @@ function App() {
 
   const handlePageDrop = (product) => {
     if (!product) return
-    if (pageTansiqSelected.length >= 2) return // لأن المنتج المقفول هو الأول
+    if (pageTansiqSelected.length >= PAGE_TANSIQ_DROPPABLE) return // لأن المنتج المقفول هو الأول
     if (pageTansiqSelected.some(p => p.link === product.link)) return
     if (product.link === LOCKED_PRODUCT.link) return
     setPageTansiqSelected([...pageTansiqSelected, product])
@@ -1386,7 +1390,7 @@ function PageTansiqProject({
   const [cartAdded, setCartAdded] = useState(false)
 
   const handleMobileSelect = (product, e) => {
-    if (selected.length >= 2) return
+    if (selected.length >= PAGE_TANSIQ_DROPPABLE) return
     flyToDropZone(e, '.page-tansiq-drop-zone', () => onDrop(product))
   }
 
@@ -1484,7 +1488,7 @@ function PageTansiqProject({
                   <div className="page-tansiq-drop-section">
                     <div className="page-tansiq-section-header">
                       <span>🛒 صندوق التنسيق</span>
-                      <span className="page-tansiq-counter">{selected.length + 1}/3</span>
+                      <span className="page-tansiq-counter">{selected.length + 1}/{PAGE_TANSIQ_SLOTS}</span>
                     </div>
                     <div
                       className={`page-tansiq-drop-zone ${dragOver ? 'is-over' : ''}`}
@@ -1510,7 +1514,7 @@ function PageTansiqProject({
                           <button className="page-tansiq-slot-remove" onClick={() => onRemove(i)}>✕</button>
                         </div>
                       ))}
-                      {[...Array(Math.max(0, 2 - selected.length))].map((_, i) => (
+                      {[...Array(Math.max(0, PAGE_TANSIQ_DROPPABLE - selected.length))].map((_, i) => (
                         <div key={`empty-${i}`} className="page-tansiq-slot empty">
                           <span>+ اسحب منتج هنا</span>
                         </div>
