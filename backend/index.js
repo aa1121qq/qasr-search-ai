@@ -3326,28 +3326,6 @@ function buildRescueVocab(neighbourhood) {
     .map(e => e[0]);
 }
 
-// يسجّل كل تحويل ناجح للمراجعة — هذا هو "التدريب": كاش للفهم على القرص
-function recordLearnedSynonym(from, to, count) {
-  try {
-    const file = path.join(__dirname, 'data', 'learned-synonyms.json');
-    let all = [];
-    try { all = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { all = []; }
-    if (!Array.isArray(all)) all = [];
-    const now = new Date().toISOString();
-    const existing = all.find(e => e.from === from && e.to === to);
-    if (existing) {
-      existing.hits = (existing.hits || 1) + 1;
-      existing.lastSeen = now;
-      existing.count = count;
-    } else {
-      all.push({ from, to, count, hits: 1, status: 'pending', firstSeen: now, lastSeen: now });
-    }
-    fs.writeFileSync(file, JSON.stringify(all, null, 2), 'utf8');
-  } catch (e) {
-    console.warn('⚠️  learned-synonyms write failed:', e.message);
-  }
-}
-
 async function aiRescueTerm(query, neighbourhood) {
   const key = (query || '').trim().toLowerCase();
   if (rescueCache.has(key)) return rescueCache.get(key);
@@ -3413,7 +3391,6 @@ JSON: {"terms": ["..."]}`;
   valid.sort((a, b) => b.words - a.words || b.term.length - a.term.length);
   const best = valid[0];
   console.log(`🚑 rescue: "${query}" → "${best.term}" (${best.cnt} منتج، من ${valid.length} مرشح)`);
-  recordLearnedSynonym(query, best.term, best.cnt);
   return remember(best.term);
 }
 
