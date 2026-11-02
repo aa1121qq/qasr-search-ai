@@ -3491,17 +3491,19 @@ body {
 
 /* 🚑 شريط إنقاذ النتائج الصفرية — شفافية إجبارية: العميل يعرف أننا بدّلنا بحثه */
 .ai-rescue-note {
-  margin: 0 1rem 1rem;
-  padding: 0.8rem 1.1rem;
+  max-width: 700px;
+  margin: 0 auto 1.25rem;
+  padding: 0.8rem 1.25rem;
   border-radius: 12px;
-  background: rgba(255, 176, 32, 0.1);
-  border: 1px solid rgba(255, 176, 32, 0.35);
-  color: var(--text, #e8e8e8);
-  font-size: 0.95rem;
-  line-height: 1.7;
-  text-align: right;
+  background: #fffaf0;
+  border: 1px solid rgba(214, 158, 46, 0.4);
+  color: #5a4a2a;
+  font-size: 1rem;
+  line-height: 1.75;
+  text-align: center;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
 }
-.ai-rescue-note strong { font-weight: 600; }
+.ai-rescue-note strong { font-weight: 700; color: #3d3220; }
 
 @media (max-width: 640px) {
   .ai-rescue-note { margin: 0 0.75rem 0.85rem; font-size: 0.88rem; padding: 0.7rem 0.9rem; }
