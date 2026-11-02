@@ -106,6 +106,8 @@ function App() {
   const [filters, setFilters] = useState({ brands: [], sizes: [], sizesTitle: '', thirdOptions: [], thirdTitle: '' })
   const [relatedSearches, setRelatedSearches] = useState([])
   const [didYouMean, setDidYouMean] = useState(null)
+  // 🚑 إنقاذ النتائج الصفرية: المصطلح البديل الذي اختاره الذكاء من كتالوجنا
+  const [aiRescue, setAiRescue] = useState(null)
   const [activeBrand, setActiveBrand] = useState(null)
   const [activeSize, setActiveSize] = useState(null)
   const [activeThird, setActiveThird] = useState(null)
@@ -219,6 +221,7 @@ function App() {
     setFilters({ brands: [], sizes: [], sizesTitle: '', thirdOptions: [], thirdTitle: '' })
     setRelatedSearches([])
     setDidYouMean(null)
+    setAiRescue(null)
     setActiveBrand(null)
     setActiveSize(null)
     setActiveThird(null)
@@ -239,6 +242,7 @@ function App() {
     }).then(response => {
       const fastDuration = Date.now() - tFastStart
       setAllProducts(response.data.products || [])
+      setAiRescue(response.data.aiRescue || null)
       setSearchType(response.data.searchType || 'general')
       setFilters(prev => ({
         ...prev,
@@ -509,6 +513,7 @@ function App() {
           setFilters({ brands: [], sizes: [], sizesTitle: '', thirdOptions: [], thirdTitle: '' })
           setRelatedSearches([])
           setDidYouMean(null)
+          setAiRescue(null)
           setDisplayCount(INITIAL_COUNT)
         } else if (response.data.success && response.data.query) {
           // legacy: نص → بحث عادي (لم يعد المسار الافتراضي لكن نحتفظ به للأمان)
@@ -988,7 +993,22 @@ function App() {
         </div>
       )}
 
-      {didYouMean && !loading && (
+      {aiRescue && !loading && (
+        <div className="ai-rescue-note">
+          لم نجد نتائج لـ <strong>«{aiRescue.from}»</strong> — نعرض لك نتائج{' '}
+          <button
+            className="did-you-mean-link"
+            onClick={() => {
+              setQuery(aiRescue.to)
+              performSearch(aiRescue.to, true)
+            }}
+          >
+            «{aiRescue.to}»
+          </button>
+        </div>
+      )}
+
+      {didYouMean && !aiRescue && !loading && (
         <div className="did-you-mean">
           هل تقصد:{' '}
           <button

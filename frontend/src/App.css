@@ -3488,3 +3488,21 @@ body {
   .intent-suggestion-title { font-size: 0.75rem; }
   .intent-suggestion-desc { font-size: 0.65rem; }
 }
+
+/* 🚑 شريط إنقاذ النتائج الصفرية — شفافية إجبارية: العميل يعرف أننا بدّلنا بحثه */
+.ai-rescue-note {
+  margin: 0 1rem 1rem;
+  padding: 0.8rem 1.1rem;
+  border-radius: 12px;
+  background: rgba(255, 176, 32, 0.1);
+  border: 1px solid rgba(255, 176, 32, 0.35);
+  color: var(--text, #e8e8e8);
+  font-size: 0.95rem;
+  line-height: 1.7;
+  text-align: right;
+}
+.ai-rescue-note strong { font-weight: 600; }
+
+@media (max-width: 640px) {
+  .ai-rescue-note { margin: 0 0.75rem 0.85rem; font-size: 0.88rem; padding: 0.7rem 0.9rem; }
+}

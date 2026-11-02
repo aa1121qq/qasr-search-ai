@@ -39,6 +39,11 @@ const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const OLLAMA_EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'bge-m3';
 const OLLAMA_LLM_MODEL = process.env.OLLAMA_LLM_MODEL || 'qwen2.5:3b';
 
+// 🤖 نماذج OpenAI — قابلة للضبط من .env بلا تعديل كود
+// gpt-4.1-nano و gpt-image-1 يتوقفان في 2026-10-23 (إشعار OpenAI)
+const LLM_MODEL   = process.env.OPENAI_LLM_MODEL   || 'gpt-4.1';
+const IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1-mini';
+
 async function localEmbed(text) {
   const res = await fetch(`${OLLAMA_URL}/api/embeddings`, {
     method: 'POST',
@@ -139,7 +144,7 @@ async function translateForClip(arabicQuery) {
   }
   try {
     const r = await openai.chat.completions.create({
-      model: 'gpt-4.1-nano',
+      model: LLM_MODEL,
       messages: [{
         role: 'user',
         content: `Translate this Arabic product search to short English (just the product noun(s), nothing else). Examples: "ثلاجة" → "refrigerator", "ماكينة قهوة" → "coffee machine", "قلاية هوائية" → "air fryer", "ترمس" → "thermos".\n\nArabic: "${arabicQuery}"\nEnglish:`,
@@ -379,7 +384,8 @@ const ACCESSORY_KEYWORDS = [
   'خرطوم', 'سلك', 'موزّع', 'موزع', 'منفاخ',
   // shipping/storage and dish-rack accessories
   'شنطة', 'نشاف', 'نشافة', 'استاند', 'منشفة',
-  'يدوي', 'يدوية', 'يدويه',
+  // ملاحظة: 'يدوي/يدوية' أُزيلت — الخلاط اليدوي والعصارة اليدوية منتجات
+  // رئيسية لا ملحقات، وكانت تُستبعد خطأً. تُعالَج كمُحدِّد في MODIFIER_RULES.
 ];
 
 // كلمات تدل على جهاز كهربائي (لو موجودة في البحث = جهاز 100%)
@@ -641,7 +647,7 @@ async function cohereChat({ prompt, history = [], jsonMode = true, temperature =
     { role: 'user', content: prompt },
   ];
   const completion = await openai.chat.completions.create({
-    model: 'gpt-4.1-nano',
+    model: LLM_MODEL,
     messages,
     temperature,
     response_format: jsonMode ? { type: 'json_object' } : undefined,
@@ -783,6 +789,84 @@ const SUBJECT_MODIFIERS = [
   'مدمج','مدمجة','سبلت','شباك','متنقل','بابين','مفرد','طقم',
 ];
 
+// 🔤 خريطة المرادفات والتحويل اللغوي (data/query-synonyms.json)
+// تحل: أسماء الماركات بالإنجليزية (Philips→فيليبس) والمرادفات (براد→ثلاجة)
+// تُحمَّل عند الإقلاع؛ تعديل الملف يحتاج إعادة تشغيل.
+const SYNONYM_MAP = new Map();   // Map<مطبَّع, البديل>
+let SYNONYM_MAX_WORDS = 1;       // أطول مفتاح بعدد الكلمات (لمطابقة العبارات)
+
+const SYNONYM_GUARD_MIN_COUNT = 3;   // كلمة تظهر في 3 منتجات فأكثر = مصطلح حقيقي
+
+function loadSynonymMap() {
+  SYNONYM_MAP.clear();
+  SYNONYM_MAX_WORDS = 1;
+  const skipped = [];
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'query-synonyms.json'), 'utf8'));
+    for (const [section, entries] of Object.entries(raw)) {
+      if (section.startsWith('_') || typeof entries !== 'object') continue;
+      for (const [from, to] of Object.entries(entries)) {
+        const key = normalizeArabicText(String(from).toLowerCase().trim());
+        if (!key || !to) continue;
+        // 🛡️ حارس: لا نحوّل كلمة موجودة أصلاً كمصطلح منتج في الكتالوج.
+        // المفاتيح اللاتينية مستثناة (لا تظهر في العناوين العربية بطبيعتها).
+        const isLatin = /^[a-z0-9 +._-]+$/i.test(String(from));
+        if (!isLatin) {
+          const words = key.split(/\s+/);
+          const allKnown = words.every(w => {
+            const e = catalogVocab.get(normalizeArab(w));
+            return e && e.count >= SYNONYM_GUARD_MIN_COUNT;
+          });
+          if (allKnown) {
+            skipped.push(from + ' (موجود في الكتالوج)');
+            continue;
+          }
+        }
+        SYNONYM_MAP.set(key, String(to));
+        SYNONYM_MAX_WORDS = Math.max(SYNONYM_MAX_WORDS, key.split(/\s+/).length);
+      }
+    }
+    console.log(`\u{1F524} Synonyms: ${SYNONYM_MAP.size} \u0645\u062F\u062E\u0644`);
+    if (skipped.length) console.warn(`\u26A0\uFE0F  \u062A\u064F\u062C\u0648\u0647\u0644 ${skipped.length}: ${skipped.join(' \u00B7 ')}`);
+  } catch (e) {
+    console.warn('⚠️  تعذّر تحميل query-synonyms.json:', e.message);
+  }
+}
+
+// يستبدل المصطلحات المعروفة في الاستعلام. يُرجع { query, changed }
+// يطابق العبارات الأطول أولاً (مثل "black and decker") قبل الكلمات المفردة.
+function applySynonyms(raw) {
+  if (!raw || SYNONYM_MAP.size === 0) return { query: raw, changed: false };
+  const words = String(raw).toLowerCase().trim().split(/\s+/).filter(Boolean);
+  const out = [];
+  let changed = false;
+  for (let i = 0; i < words.length; ) {
+    let matched = false;
+    for (let len = Math.min(SYNONYM_MAX_WORDS, words.length - i); len >= 1; len--) {
+      const phrase = words.slice(i, i + len).join(' ');
+      const hit = SYNONYM_MAP.get(normalizeArabicText(phrase));
+      if (hit) {
+        // لا نبدّل لو النص المكتوب يطابق البديل أصلاً
+        if (normalizeArabicText(hit.toLowerCase()) !== normalizeArabicText(phrase)) changed = true;
+        out.push(hit);
+        i += len;
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) { out.push(words[i]); i++; }
+  }
+  return { query: out.join(' '), changed };
+}
+
+// 🚫 كلمات لا تصف منتجاً — تُستبعد من موضوع البحث
+// السبب: 'ثلاجة تحت 1000' كانت تطابق 'موقد بالأشعة تحت الحمراء' عبر كلمة 'تحت'
+const SUBJECT_WEAK_WORDS = new Set([
+  'تحت','فوق','بين','حول','عند','لدي','مع','بدون','بلا','من','الى','على','عن','في',
+  'او','ام','ثم','حتى','اي','كل','بعض','هذا','هذه','ذلك','التي','الذي',
+  'ارخص','اغلى','افضل','احسن','اجود','اقوى','اكبر','اصغر','سعر','بسعر','ريال','ر.س',
+].map(w => normalizeArabicText(w)));
+
 function extractSubject(query) {
   if (!query) return '';
   // طبّع كلمات الـ strip list (يوحد الألف بأشكاله: آ/أ/إ → ا)
@@ -792,6 +876,8 @@ function extractSubject(query) {
     if (!w) return false;
     if (/^\d+(\.\d+)?$/.test(w)) return false;
     if (/^(لتر|مل|كجم|كيلو|واط|بار|انش|سم|متر)$/.test(w)) return false;
+    // كلمات ربط/مقارنة لا تصف منتجاً — كانت 'تحت' تطابق 'الأشعة تحت الحمراء'
+    if (SUBJECT_WEAK_WORDS.has(normalizeArabicText(w))) return false;
     const normalized = normalizeArabicText(w);
     if (wordsToStrip.has(normalized)) return false;
     return true;
@@ -847,8 +933,11 @@ const MODIFIER_RULES = {
   'كهربائية': { require: /كهرب|واط|watt|electric|أوتوماتيك|اوتوماتيك/i, exclude: null },
   'كهربائي':  { require: /كهرب|واط|watt|electric|أوتوماتيك|اوتوماتيك/i, exclude: null },
   'كهرباء':   { require: /كهرب|واط|watt|electric/i, exclude: null },
-  'يدوية':    { require: /يدوي/i, exclude: /كهرب|واط|electric|أوتوماتيك/i },
-  'يدوي':     { require: /يدوي/i, exclude: /كهرب|واط|electric|أوتوماتيك/i },
+  // «يدوي» في عناوين المنتجات تعني «محمول باليد» لا «غير كهربائي»:
+  // الخلاط اليدوي والمضرب اليدوي أجهزة كهربائية لها واط. الاستبعاد القديم
+  // كان يحذف 9 من 11 خلاطاً يدوياً لأن عناوينها تذكر الواط.
+  'يدوية':    { require: /يدوي/i, exclude: null },
+  'يدوي':     { require: /يدوي/i, exclude: null },
   'لاسلكية':  { require: /لاسلكي|بطاري|cordless/i, exclude: null },
   'لاسلكي':   { require: /لاسلكي|بطاري|cordless/i, exclude: null },
   // نوع التشغيل
@@ -2242,6 +2331,17 @@ function normalizeArab(w) {
           .replace(/ة/g, 'ه');
 }
 
+// 🔤 الهيكل الساكن: الكلمة بعد حذف حروف المد (ا/و/ي)
+// الماركات المعرّبة تفقد حروف المد عند الكتابة السريعة، والمسافة الناتجة
+// تتجاوز حدّ الكلمات القصيرة فلا تُلتقط: "فلبس"→"فيليبس" مسافتها 2 والحدّ 1.
+// skeleton("فلبس") === skeleton("فيليبس") === "فلبس"
+const catalogSkeletons = new Map();   // Map<skeleton, normalizedWord[]>
+const SKELETON_MIN_COUNT = 3;         // تجاهل الكلمات النادرة (غالباً أخطاء في العناوين)
+
+function arabicSkeleton(w) {
+  return w.replace(/[اوي]/g, '');
+}
+
 // 🔍 Autocomplete corpus — عبارات 2-3 كلمات من عناوين المنتجات
 // مرتّبة بالتكرار، تُستخدم في /suggest endpoint للاقتراحات أثناء الكتابة
 const autocompletePhrases = []; // [{ phrase, count, norm }]
@@ -2360,7 +2460,18 @@ function buildCatalogVocab() {
       catalogVocab.set(norm, e);
     }
   }
+
+  // بناء فهرس الهياكل الساكنة من المفردات النهائية
+  catalogSkeletons.clear();
+  for (const [normWord] of catalogVocab) {
+    const sk = arabicSkeleton(normWord);
+    if (sk.length < 2) continue;
+    if (!catalogSkeletons.has(sk)) catalogSkeletons.set(sk, []);
+    catalogSkeletons.get(sk).push(normWord);
+  }
+
   console.log(`📚 Catalog vocab: ${catalogVocab.size} كلمة فريدة من ${processed} منتج`);
+  console.log(`🔤 Skeleton index: ${catalogSkeletons.size} هيكل ساكن`);
 }
 
 // Levenshtein distance — تطبيق نظيف بـ DP كاملة
@@ -2431,6 +2542,35 @@ function findCatalogCandidates(word, maxCount = 5) {
     }
   }
   fuzzy.sort((a, b) => a.adjustedDistance - b.adjustedDistance || b.count - a.count);
+
+  // 2.5) 🔤 احتياطي الهيكل الساكن — يعمل فقط لو فشل المساران السابقان تماماً
+  // (لا مطابقة تامة ولا أي مرشح ضمن maxDistance). إضافة محضة: لا يغيّر أي
+  // نتيجة ينتجها النظام اليوم، ويملأ فقط الحالة التي يعجز فيها حالياً.
+  // مثال: "فلبس" → "فيليبس" (مسافة 2، فرق طول 2، والحدّ 1 → تُستبعد مبكراً)
+  if (!exactEntry && fuzzy.length === 0) {
+    const sk = arabicSkeleton(norm);
+    if (sk.length >= 2) {
+      for (const vocabWord of (catalogSkeletons.get(sk) || [])) {
+        if (vocabWord === norm) continue;
+        const entry = catalogVocab.get(vocabWord);
+        if (!entry || entry.count < SKELETON_MIN_COUNT) continue;
+        const d = levenshtein(norm, vocabWord);
+        fuzzy.push({
+          word: entry.display,
+          distance: d,
+          // +1 يبقيها دائماً خلف أي مرشح حقيقي لو ظهر لاحقاً
+          adjustedDistance: d + 1,
+          count: entry.count,
+          isExactSpelling: false,
+          viaSkeleton: true,
+        });
+      }
+      fuzzy.sort((a, b) => a.adjustedDistance - b.adjustedDistance || b.count - a.count);
+      if (fuzzy.length > 0) {
+        console.log(`🔤 skeleton match: "${word}" → ${fuzzy.slice(0, 3).map(f => f.word).join(', ')}`);
+      }
+    }
+  }
 
   // 3) دمج: لو exact نادر (count ≤ 2) ولدينا بديل قريب جداً ≥ 5x count → نُفضّل البديل أولاً
   if (exactEntry && fuzzy.length > 0) {
@@ -2776,6 +2916,9 @@ async function fetchImageAsBase64(url) {
 }
 
 // توليد بـ Gemini Nano Banana (gemini-2.5-flash-image) — يقبل صور المنتجات كمدخلات
+// أقصى عدد منتجات في تنسيق واحد — يطابق PAGE_TANSIQ_SLOTS في الواجهة
+const MAX_COMPOSE_ITEMS = 5;
+
 async function generateWithGemini(prompt, items) {
   if (!gemini) throw new Error('GEMINI_API_KEY not configured');
 
@@ -2819,7 +2962,7 @@ app.post('/tansiq-compose', async (req, res) => {
       return res.status(400).json({ success: false, message: 'products array required' });
     }
 
-    const items = products.slice(0, 3);
+    const items = products.slice(0, MAX_COMPOSE_ITEMS);
     trace('received', { count: items.length, titles: items.map(p => (p.title || '').slice(0, 40)) });
 
     const itemsDescription = items
@@ -2909,6 +3052,27 @@ app.post('/tansiq-compose', async (req, res) => {
 ║       • NEVER place the tray behind or beside the products     ║
 ║       • NEVER show the tray standing upright                   ║
 ║       • The tray is the BASE; everything else rests on it      ║
+║                                                                ║
+║ 14. ⚠️ EVERY ATTACHED PRODUCT MUST APPEAR — CRITICAL:          ║
+║     There are ${String(items.length).padEnd(2)} attached images. ALL ${String(items.length).padEnd(2)} products MUST be        ║
+║     clearly visible in the final scene. Do NOT omit, hide,     ║
+║     crop out, or merge any product. Do NOT decide a product    ║
+║     "doesn't fit the scene" — rearrange the layout instead.    ║
+║     Count them before you finish: ${String(items.length).padEnd(2)} distinct products.        ║
+║                                                                ║
+║ 15. ARABIC HOSPITALITY ITEM PLACEMENT:                         ║
+║       • مبخرة / incense burner (bakhoor burner): a standing    ║
+║         vessel, often with a lid or an open bowl on a stem.    ║
+║         Place it UPRIGHT on the surface BESIDE the tray        ║
+║         (not on it), as a side accent. ~15-20cm tall — taller  ║
+║         than a cup, shorter than the thermos. A thin wisp of   ║
+║         smoke is allowed, nothing more.                        ║
+║       • تمرية / date dish: a small shallow bowl or footed      ║
+║         dish for dates and sweets. Place it ON the tray or     ║
+║         right next to the cups. ~10-15cm wide, ~5cm tall —     ║
+║         it is SMALL, never plate-sized or bowl-deep.           ║
+║         It may hold a few dates; do not fill it with           ║
+║         invented food beyond that.                             ║
 ╚════════════════════════════════════════════════════════════════╝
 
 Products being composited (informational only — the attached images are the source of truth):
@@ -2969,7 +3133,7 @@ Style: warm cozy lighting, modern Saudi home aesthetic, soft natural light, neut
       };
 
       const openaiAttempts = [
-        { model: 'gpt-image-1', params: { quality: 'medium' } },
+        { model: IMAGE_MODEL, params: { quality: 'medium' } },
         { model: 'dall-e-3', params: { quality: 'standard' } },
         { model: 'dall-e-2', params: {} },
       ];
@@ -3119,8 +3283,170 @@ app.get('/suggest', (req, res) => {
   res.json({ success: true, query: q, suggestions });
 });
 
+// ═══════════════════════════════════════════════════════════════
+// 🚑 إنقاذ النتائج الصفرية بالذكاء الاصطناعي
+// يعمل فقط لمّا تكون النتائج النهائية صفراً بعد كل الفلاتر.
+// الموديل لا يُرجع منتجات ولا يرى أسعاراً ولا مخزوناً — بل يختار
+// 1-3 مصطلحات من مفردات كتالوجنا نفسها (جوار الـ kNN قبل الفلترة)،
+// ثم نتحقق من كل مصطلح بـ catalogVocab + عدّة ES قبل أي استخدام.
+// فضاء مُخرَجه محصور في قائمة نبنيها نحن ⇒ الاختلاق ممنوع بنيوياً.
+// ═══════════════════════════════════════════════════════════════
+const RESCUE_CACHE_MAX = 500;
+const RESCUE_MAX_TERMS = 3;
+const RESCUE_VOCAB_MAX = 30;
+const RESCUE_NEIGHBOURS = 30;
+const rescueCache = new Map();   // query → term | null (يحفظ السالب أيضاً)
+
+// كلمات لا تصف فئة منتج — تُستبعد من قائمة المصطلحات المسموحة
+const RESCUE_STOPWORDS = new Set([
+  'واط', 'لتر', 'مل', 'سم', 'كيلو', 'جرام', 'انش', 'بار', 'فولت', 'هرتز',
+  'قطعة', 'قطع', 'حبة', 'حبات', 'طقم', 'مقاس', 'عدد', 'موديل',
+  'اسود', 'ابيض', 'رمادي', 'فضي', 'ذهبي', 'احمر', 'ازرق', 'اخضر', 'بني',
+  'ملون', 'وردي', 'بيج', 'كحلي', 'شفاف', 'مع', 'من', 'الجديدة', 'الجديد',
+].map(w => normalizeArab(w)));
+
+// يبني قائمة المصطلحات المسموحة من عناوين جوار الـ kNN.
+// كل كلمة يجب أن تكون موجودة فعلاً في catalogVocab — فالقائمة مفرداتك أنت.
+function buildRescueVocab(neighbourhood) {
+  const freq = new Map();
+  for (const p of neighbourhood) {
+    for (const raw of String(p.title || '').split(/\s+/)) {
+      const w = raw.replace(/[^ء-يa-zA-Z]/g, '');
+      if (w.length < 3) continue;
+      const norm = normalizeArab(w.toLowerCase());
+      if (!norm || RESCUE_STOPWORDS.has(norm)) continue;
+      const entry = catalogVocab.get(norm);
+      if (!entry || entry.count < 2) continue;
+      freq.set(entry.display, (freq.get(entry.display) || 0) + 1);
+    }
+  }
+  return [...freq.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, RESCUE_VOCAB_MAX)
+    .map(e => e[0]);
+}
+
+// يسجّل كل تحويل ناجح للمراجعة — هذا هو "التدريب": كاش للفهم على القرص
+function recordLearnedSynonym(from, to, count) {
+  try {
+    const file = path.join(__dirname, 'data', 'learned-synonyms.json');
+    let all = [];
+    try { all = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { all = []; }
+    if (!Array.isArray(all)) all = [];
+    const now = new Date().toISOString();
+    const existing = all.find(e => e.from === from && e.to === to);
+    if (existing) {
+      existing.hits = (existing.hits || 1) + 1;
+      existing.lastSeen = now;
+      existing.count = count;
+    } else {
+      all.push({ from, to, count, hits: 1, status: 'pending', firstSeen: now, lastSeen: now });
+    }
+    fs.writeFileSync(file, JSON.stringify(all, null, 2), 'utf8');
+  } catch (e) {
+    console.warn('⚠️  learned-synonyms write failed:', e.message);
+  }
+}
+
+async function aiRescueTerm(query, neighbourhood) {
+  const key = (query || '').trim().toLowerCase();
+  if (rescueCache.has(key)) return rescueCache.get(key);
+  const remember = (v) => {
+    if (rescueCache.size >= RESCUE_CACHE_MAX) rescueCache.delete(rescueCache.keys().next().value);
+    rescueCache.set(key, v);
+    return v;
+  };
+
+  const vocab = buildRescueVocab(neighbourhood);
+  if (vocab.length < 3) return remember(null);
+  const allowed = new Set(vocab.map(w => normalizeArab(w.toLowerCase())));
+
+  const prompt = `العميل بحث في متجر أدوات منزلية سعودي عن: "${query}"
+ولم تظهر له أي نتائج.
+
+هذه المصطلحات موجودة فعلاً في كتالوج المتجر وقريبة من بحثه:
+${vocab.join(' · ')}
+
+اختر من القائمة أعلاه فقط ما يُطابق مقصد العميل — من مصطلح واحد إلى ثلاثة.
+رتّبها من الأخص إلى الأعم، والأفضل أن يكون المصطلح من كلمتين (نوع الجهاز + نوع المنتج)
+لأن الكلمة الواحدة العامة تُرجع نتائج غير ذات صلة.
+يجوز دمج كلمتين من القائمة في مصطلح واحد (مثل: كلمة جهاز + كلمة نوع).
+ممنوع تماماً: أي كلمة من خارج القائمة · أسماء منتجات · أي شرح.
+لو لم تجد ما يُطابق مقصده، أعِد قائمة فارغة.
+
+JSON: {"terms": ["..."]}`;
+
+  let terms = [];
+  try {
+    const text = await cohereChat({ prompt, jsonMode: true, temperature: 0, maxTokens: 120 });
+    const parsed = JSON.parse(text);
+    terms = Array.isArray(parsed.terms) ? parsed.terms.slice(0, RESCUE_MAX_TERMS) : [];
+  } catch (e) {
+    console.warn('🚑 rescue LLM failed:', e.message);
+    return remember(null);
+  }
+
+  // 🛡️ نفحص كل المرشحين ثم نُفضّل الأخص (الأكثر كلمات) — لا أول ما يصلح.
+  // الكلمة الواحدة العامة مثل "ايس" تجتاز العدّة لكنها تُرجع نتائج غير ذات صلة.
+  const valid = [];
+  for (const t of terms) {
+    const term = String(t || '').trim();
+    if (!term) continue;
+    const words = term.split(/\s+/).filter(Boolean);
+    if (words.length === 0 || words.length > 3) continue;
+    // 🛡️ بوّابة ١: كل كلمة من القائمة المسموحة — يمنع الاختلاق
+    if (!words.every(w => allowed.has(normalizeArab(w.toLowerCase())))) {
+      console.log(`🚑 rejected (outside vocab): "${term}"`);
+      continue;
+    }
+    // 🛡️ بوّابة ٢: مصطلح من كلمة واحدة يجب أن يكون ≥4 أحرف (يمنع "ايس")
+    if (words.length === 1 && normalizeArab(words[0].toLowerCase()).length < 4) {
+      console.log(`🚑 rejected (too short/generic): "${term}"`);
+      continue;
+    }
+    // 🛡️ بوّابة ٣: يجب أن يُرجع منتجين حقيقيين على الأقل
+    const cnt = await quickCountForQuery(term);
+    if (cnt < 2) { console.log(`🚑 rejected (${cnt} products): "${term}"`); continue; }
+    valid.push({ term, words: words.length, cnt });
+  }
+  if (valid.length === 0) return remember(null);
+  valid.sort((a, b) => b.words - a.words || b.term.length - a.term.length);
+  const best = valid[0];
+  console.log(`🚑 rescue: "${query}" → "${best.term}" (${best.cnt} منتج، من ${valid.length} مرشح)`);
+  recordLearnedSynonym(query, best.term, best.cnt);
+  return remember(best.term);
+}
+
+// استرجاع موحّد لنص بحث (kNN + نصي) — يُستخدم في إعادة البحث
+async function retrieveProductsFor(text, limit) {
+  const emb = await getQueryEmbedding(text);
+  const clip = await clipTextEmbedding(await translateForClip(text)).catch(() => null);
+  const knn = [{ field: 'embedding', query_vector: emb, k: limit, num_candidates: Math.min(limit * 2, 1000), boost: 1.5 }];
+  if (clip) knn.push({ field: 'clip_image_embedding', query_vector: clip, k: limit, num_candidates: Math.min(limit * 2, 1000), boost: 1.5 });
+  const res = await esClient.search({
+    index: INDEX_NAME, size: limit,
+    _source: ['title', 'image_link', 'price', 'sale_price', 'brand', 'link', 'color', 'size', 'product_kind', 'product_subtype', 'product_tags', 'product_material'],
+    query: { multi_match: { query: text, fields: ['title^2', 'brand', 'color', 'size'], fuzziness: 'AUTO', operator: 'or', minimum_should_match: '50%' } },
+    knn,
+  });
+  return res.hits.hits.map((hit) => {
+    const discount = getDiscountInfo(hit._source.price, hit._source.sale_price);
+    return {
+      id: hit._id, score: hit._score, title: hit._source.title, image_link: hit._source.image_link,
+      price: discount.hasDiscount ? hit._source.sale_price : hit._source.price,
+      originalPrice: discount.hasDiscount ? hit._source.price : null,
+      discountPercentage: discount.discountPercentage, hasDiscount: discount.hasDiscount,
+      brand: hit._source.brand, link: hit._source.link,
+      color: hit._source.color || '', size: hit._source.size || '',
+      product_kind: hit._source.product_kind || null, product_subtype: hit._source.product_subtype || null,
+      product_tags: hit._source.product_tags || [], product_material: hit._source.product_material || null,
+    };
+  });
+}
+
 app.get('/search', async (req, res) => {
-  const query = req.query.q;
+  let query = req.query.q;
+  let synonymApplied = null;
   const limit = parseInt(req.query.limit) || 500;
   const skipIntent = req.query.skipIntent === 'true';
   const skipAI = req.query.skipAI === 'true';  // إذا true: نتخطى ميزات الـ AI (ملخص/intent/filters/related/didYouMean)
@@ -3180,8 +3506,19 @@ app.get('/search', async (req, res) => {
     });
   }
 
+  // 🔤 المرادفات والتحويل اللغوي: Philips→فيليبس · براد→ثلاجة
+  // يُطبَّق بعد فحص كود المنتج (الأكواد لاتينية ولا يجوز تحويلها)
+  {
+    const syn = applySynonyms(query);
+    if (syn.changed) {
+      console.log(`🔤 synonym: "${query}" → "${syn.query}"`);
+      synonymApplied = { from: query, to: syn.query };
+      query = syn.query;
+    }
+  }
+
   // ⚡ كاش الاستجابة الكاملة — الـ hit يجيب الرد فوراً
-  const responseCacheKey = `v3|${query.toLowerCase().trim()}|${limit}|${skipIntent ? '1' : '0'}|${skipAI ? '1' : '0'}|k=${filterKind || ''}|s=${filterSubtype || ''}|t=${filterTag || ''}|m=${filterMaterial || ''}`;
+  const responseCacheKey = `v4|${query.toLowerCase().trim()}|${(synonymApplied ? synonymApplied.from : '').toLowerCase().trim()}|${limit}|${skipIntent ? '1' : '0'}|${skipAI ? '1' : '0'}|k=${filterKind || ''}|s=${filterSubtype || ''}|t=${filterTag || ''}|m=${filterMaterial || ''}`;
   const cachedResponse = responseCache.get(responseCacheKey);
   if (cachedResponse) {
     console.log(`⚡ Response cache hit: "${query}"`);
@@ -3326,6 +3663,10 @@ app.get('/search', async (req, res) => {
         console.warn('Rerank failed (continuing with kNN order):', e.message);
       }
     }
+
+    // 📸 لقطة جوار الـ kNN قبل أي فلترة — مفردات الإنقاذ عند التصفير
+    const knnNeighbourhood = products.slice(0, RESCUE_NEIGHBOURS);
+    let aiRescue = null;
 
     // 4. Filter accessories — صارم: درج/شنطة/نشاف ليست عناصر رئيسية
     {
@@ -3529,6 +3870,53 @@ app.get('/search', async (req, res) => {
       }
     }
 
+    // 🚑 إنقاذ بالذكاء الاصطناعي — آخر درجة في السُلّم، بعد المرادفات
+    // والتصحيح الإملائي وإعادة البحث. يعمل فقط عند الصفر المطلق، وقفزة واحدة
+    // بلا تكرار. للتعطيل: ?skipRescue=true
+    if (products.length === 0 && knnNeighbourhood.length >= 3 && req.query.skipRescue !== 'true') {
+      try {
+        const rescueT0 = Date.now();
+        const vocabForTrace = buildRescueVocab(knnNeighbourhood);
+        const term = await aiRescueTerm(query, knnNeighbourhood);
+        if (term) {
+          let rescued = await retrieveProductsFor(term, limit);
+          rescued = rescued.filter(p => !isAccessory(p.title, searchType.deviceKeyword, term));
+          // 🛡️ بوّابة ٤: صلة صارمة — كل كلمة من المصطلح تظهر فعلاً في العنوان.
+          // بدونها يُسرّب multi_match الضبابي نتائج بعيدة ("ايس" → "ايا كلين").
+          const termWords = term.split(/\s+/)
+            .map(w => normalizeArab(w.toLowerCase()))
+            .filter(w => w.length >= 3);
+          if (termWords.length > 0) {
+            rescued = rescued.filter(p => {
+              const t = normalizeArab(String(p.title || '').toLowerCase());
+              return termWords.every(w => t.includes(w));
+            });
+          }
+          const rSubject = extractSubject(term);
+          if (rSubject) {
+            // شبكة أمان: لو صفّر الفلتر النتائج، نتخطّاه (لا نُصفّر مرتين)
+            const strict = rescued.filter(p => titleMatchesSubject(p.title, rSubject));
+            if (strict.length > 0) rescued = strict;
+          }
+          const seenRescue = new Set();
+          rescued = rescued.filter(p => {
+            const k = (p.title || '').trim().toLowerCase();
+            if (seenRescue.has(k)) return false;
+            seenRescue.add(k);
+            return true;
+          });
+          if (rescued.length > 0) {
+            products = rescued;
+            aiRescue = { from: query, to: term, count: rescued.length, ms: Date.now() - rescueT0 };
+            trace('ai_rescue', { ...aiRescue, vocab: vocabForTrace.slice(0, 12) });
+            console.log(`🚑 rescued "${query}" → "${term}": ${rescued.length} products in ${aiRescue.ms}ms`);
+          }
+        }
+      } catch (e) {
+        console.warn('🚑 rescue failed:', e.message);
+      }
+    }
+
     // ⚡ intent سريع:
     // - لو في typo: نعرض 3 اقتراحات تصحيحية ديناميكية (بدل intent chips التصنيفية)
     // - لو لا typo: نعرض intent chips العادي (categories من القاموس أو إحصائي)
@@ -3582,6 +3970,11 @@ app.get('/search', async (req, res) => {
       ]);
     }
 
+    // لو حوّلنا المصطلح ولا يوجد تصحيح إملائي، نُعلم المستخدم بالتحويل
+    if (synonymApplied && !didYouMean) didYouMean = synonymApplied.to;
+    // لو أنقذنا البحث بالذكاء، نُعلم المستخدم بالمصطلح البديل
+    if (aiRescue && !didYouMean) didYouMean = aiRescue.to;
+
     const finalResponse = {
       success: true,
       query: query,
@@ -3600,6 +3993,7 @@ app.get('/search', async (req, res) => {
       },
       relatedSearches: relatedSearches,
       didYouMean: didYouMean,
+      aiRescue: aiRescue,
     };
     if (wantDebug) {
       trace('response_ready', { totalProducts: finalResponse.products?.length || 0, topTitle: finalResponse.products?.[0]?.title?.slice(0, 60) });
@@ -4829,6 +5223,7 @@ app.listen(PORT, () => {
     .then(count => {
       console.log(`📦 Loaded ${count} product codes for direct lookup`);
       buildCatalogVocab();
+    loadSynonymMap();
       buildAutocompleteCorpus();
     })
     .catch(err => console.error('❌ Failed to load product catalog:', err.message));
