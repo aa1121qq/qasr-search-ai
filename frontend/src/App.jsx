@@ -995,7 +995,7 @@ function App() {
 
       {aiRescue && !loading && (
         <div className="ai-rescue-note">
-          لم نجد نتائج لـ <strong>«{aiRescue.from}»</strong> — نعرض لك نتائج{' '}
+          لم نجد نتائج لـ <strong>«{aiRescue.from}»</strong> — نعرض لك أقرب بديل:{' '}
           <button
             className="did-you-mean-link"
             onClick={() => {
@@ -1074,6 +1074,31 @@ function App() {
           <button className="intent-skip" onClick={handleSkipIntent}>
             تخطي وعرض كل النتائج ↓
           </button>
+        </div>
+      )}
+
+      {hasSearched && !loading && !error && allProducts.length === 0 && (
+        <div className="no-results">
+          <p className="no-results-title">
+            لم نجد نتائج لـ <strong>«{devInfo?.query}»</strong>
+          </p>
+          {relatedSearches.length > 0 && (
+            <>
+              <p className="no-results-hint">جرّب البحث عن:</p>
+              <div className="related-searches-list">
+                {relatedSearches.map((related, i) => (
+                  <button
+                    key={i}
+                    className="related-search"
+                    onClick={() => handleRelatedSearch(related.query)}
+                  >
+                    <span className="related-search-icon">{related.icon}</span>
+                    <span>{related.query}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
 

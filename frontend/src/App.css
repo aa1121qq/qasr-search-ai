@@ -3505,6 +3505,22 @@ body {
 }
 .ai-rescue-note strong { font-weight: 700; color: #3d3220; }
 
+/* نتيجة صفر بعد فشل الإنقاذ: رد صادق مع اقتراحات مجرّبة */
+.no-results {
+  max-width: 700px;
+  margin: 2rem auto;
+  padding: 1.5rem 1.25rem;
+  border-radius: 12px;
+  background: #fffaf0;
+  border: 1px solid rgba(214, 158, 46, 0.4);
+  color: #5a4a2a;
+  text-align: center;
+}
+.no-results-title { margin: 0; font-size: 1.1rem; }
+.no-results-title strong { font-weight: 700; color: #3d3220; }
+.no-results-hint { margin: 1rem 0 0.6rem; font-size: 0.95rem; }
+.no-results .related-searches-list { justify-content: center; }
+
 @media (max-width: 640px) {
   .ai-rescue-note { margin: 0 0.75rem 0.85rem; font-size: 0.88rem; padding: 0.7rem 0.9rem; }
 }
