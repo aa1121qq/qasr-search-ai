@@ -2659,7 +2659,7 @@ function catalogTypoCorrectionCandidates(query, maxResults = 5) {
     unique.push(c);
   }
   unique.sort((a, b) => a.cost - b.cost || b.count - a.count);
-  return unique.slice(0, maxResults).map(c => ({ corrected: c.corrected, hasChanges: true }));
+  return unique.slice(0, maxResults).map(c => ({ corrected: c.corrected, hasChanges: true, cost: c.cost }));
 }
 
 // 🔍 Quick count: عدد المنتجات المطابقة لاستعلام (للتحقق من جودة typo correction)
@@ -2719,6 +2719,14 @@ async function buildCorrectionSuggestions(correctedQuery, products) {
   return suggestions;
 }
 
+// كلمات لا تحدد المنتج: آلة/جهاز + الألوان والمقاسات والمواد
+let _descriptorWords = null;
+function isDescriptorWord(w) {
+  if (!_descriptorWords) {
+    _descriptorWords = new Set([...GENERIC_DEVICE_WORDS, ...SUBJECT_MODIFIERS].map(x => normalizeArabicText(x)));
+  }
+  return _descriptorWords.has(normalizeArabicText(w));
+}
 // 🧠 detectTypo — يبحث عن أقرب كلمة في كتالوج المنتجات الحقيقية
 // المنهج: catalog vocab أولاً (دقة 100% — لا hallucination)، LLM فقط كـ fallback
 // يعمل حتى لو فيه نتائج fuzzy للاستعلام الأصلي (يقارن: هل التصحيح أكثر دقة؟)
@@ -2743,14 +2751,22 @@ async function detectTypo(query, originalCount = null) {
     const candidates = catalogTypoCorrectionCandidates(query, 5);
     if (candidates.length > 0) {
       // فحص كل candidate بالـ ES count
+      const passing = [];
       for (const c of candidates) {
         const cnt = await quickCountForQuery(c.corrected);
-        if (cnt >= Math.max(originalCount, 1)) {
-          console.log(`✓ catalog typo: "${query}" (${originalCount}) → "${c.corrected}" (${cnt})`);
-          typoCache.set(key, c.corrected);
-          return c.corrected;
+        const ok = cnt >= Math.max(originalCount, 1);
+        if (ok) passing.push({ ...c, cnt });
+        else console.log(`  candidate rejected: "${c.corrected}" (${cnt})`);
+      }
+      if (passing.length > 0) {
+        // الأقرب حرفياً أولاً، إلا لو كتابة قريبة منه بكثير منتجات أكثر (اسبرسو 1 ← اسبريسو 13)
+        let best = passing[0];
+        for (const c of passing.slice(1)) {
+          if ((c.cost ?? 0) <= (passing[0].cost ?? 0) + 1.0 && c.cnt >= best.cnt * 3) best = c;
         }
-        console.log(`  candidate rejected: "${c.corrected}" (${cnt})`);
+        console.log(`✓ catalog typo: "${query}" (${originalCount}) → "${best.corrected}" (${best.cnt})`);
+        typoCache.set(key, best.corrected);
+        return best.corrected;
       }
     }
 
@@ -3301,7 +3317,30 @@ app.get('/suggest', (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 const RESCUE_CACHE_MAX = 500;
 const RESCUE_MAX_TERMS = 3;
-const RESCUE_JUDGE_TITLES = 12;
+const RESCUE_JUDGE_TITLES = 30;
+
+// يقدّم المنتجات التي تحمل كلمات العميل (ولو بخطأ إملائي: اسبرسوا ≈ اسبريسو)
+// ترتيب ثابت: المتساوون يحتفظون بترتيب الاسترجاع
+function rankByQueryWords(query, products) {
+  const qWords = String(query || '').split(/\s+/)
+    .filter(w => !isDescriptorWord(w))
+    .map(w => normalizeArabicText(w))
+    .filter(w => w.length >= 3);
+  if (qWords.length === 0) return products;
+  const score = (p) => {
+    const tw = normalizeArabicText(String(p.title || '')).split(/\s+/);
+    let s = 0;
+    for (const q of qWords) {
+      const lim = q.length >= 5 ? 2 : 1;
+      if (tw.some(t => Math.abs(t.length - q.length) <= lim && levenshtein(q, t) <= lim)) s++;
+    }
+    return s;
+  };
+  return products
+    .map((p, i) => ({ p, i, s: score(p) }))
+    .sort((a, b) => b.s - a.s || a.i - b.i)
+    .map(x => x.p);
+}
 const RESCUE_TYPES_MAX = 1500;
 const rescueCache = new Map();   // query → terms[] (يحفظ السالب أيضاً)
 let rescueTypes = { size: -1, list: [] };
@@ -3374,7 +3413,7 @@ JSON: {"terms": ["..."]}`;
 
 // 🛡️ بوّابة ٤: فحص الصلة — يُبقي فقط المنتجات التي تخدم حاجة العميل
 async function filterRescueByRelevance(query, products) {
-  const sample = products.slice(0, RESCUE_JUDGE_TITLES);
+  const sample = rankByQueryWords(query, products).slice(0, RESCUE_JUDGE_TITLES);
   if (sample.length === 0) return [];
   const list = sample.map((p, i) => `${i + 1}. ${p.title}`).join('\n');
 
@@ -3392,7 +3431,7 @@ ${list}
 أعد أرقام المنتجات المقبولة فقط، أو قائمة فارغة لو لا يوجد.
 JSON: {"relevant": [1, 2]}`;
 
-  const text = await cohereChat({ prompt, jsonMode: true, temperature: 0, maxTokens: 120 });
+  const text = await cohereChat({ prompt, jsonMode: true, temperature: 0, maxTokens: 300 });
   const parsed = JSON.parse(text);
   const ids = new Set(
     (Array.isArray(parsed.relevant) ? parsed.relevant : [])
@@ -3503,7 +3542,7 @@ app.get('/search', async (req, res) => {
   }
 
   // ⚡ كاش الاستجابة الكاملة — الـ hit يجيب الرد فوراً
-  const responseCacheKey = `v5|${query.toLowerCase().trim()}|${(synonymApplied ? synonymApplied.from : '').toLowerCase().trim()}|${limit}|${skipIntent ? '1' : '0'}|${skipAI ? '1' : '0'}|k=${filterKind || ''}|s=${filterSubtype || ''}|t=${filterTag || ''}|m=${filterMaterial || ''}`;
+  const responseCacheKey = `v8|${query.toLowerCase().trim()}|${(synonymApplied ? synonymApplied.from : '').toLowerCase().trim()}|${limit}|${skipIntent ? '1' : '0'}|${skipAI ? '1' : '0'}|k=${filterKind || ''}|s=${filterSubtype || ''}|t=${filterTag || ''}|m=${filterMaterial || ''}`;
   const cachedResponse = responseCache.get(responseCacheKey);
   if (cachedResponse) {
     console.log(`⚡ Response cache hit: "${query}"`);
@@ -4017,7 +4056,7 @@ app.get('/search/ai', async (req, res) => {
   }
 
   // كاش
-  const cacheKey = `ai2|${query.toLowerCase().trim()}|${skipIntent ? '1' : '0'}`;
+  const cacheKey = `ai5|${query.toLowerCase().trim()}|${skipIntent ? '1' : '0'}`;
   const cached = responseCache.get(cacheKey);
   if (cached) {
     console.log(`⚡ AI cache hit: "${query}"`);
