@@ -3542,7 +3542,7 @@ app.get('/search', async (req, res) => {
   }
 
   // ⚡ كاش الاستجابة الكاملة — الـ hit يجيب الرد فوراً
-  const responseCacheKey = `v8|${query.toLowerCase().trim()}|${(synonymApplied ? synonymApplied.from : '').toLowerCase().trim()}|${limit}|${skipIntent ? '1' : '0'}|${skipAI ? '1' : '0'}|k=${filterKind || ''}|s=${filterSubtype || ''}|t=${filterTag || ''}|m=${filterMaterial || ''}`;
+  const responseCacheKey = `v8|${INDEX_NAME}|${query.toLowerCase().trim()}|${(synonymApplied ? synonymApplied.from : '').toLowerCase().trim()}|${limit}|${skipIntent ? '1' : '0'}|${skipAI ? '1' : '0'}|k=${filterKind || ''}|s=${filterSubtype || ''}|t=${filterTag || ''}|m=${filterMaterial || ''}`;
   const cachedResponse = responseCache.get(responseCacheKey);
   if (cachedResponse) {
     console.log(`⚡ Response cache hit: "${query}"`);
@@ -4056,7 +4056,7 @@ app.get('/search/ai', async (req, res) => {
   }
 
   // كاش
-  const cacheKey = `ai5|${query.toLowerCase().trim()}|${skipIntent ? '1' : '0'}`;
+  const cacheKey = `ai5|${INDEX_NAME}|${query.toLowerCase().trim()}|${skipIntent ? '1' : '0'}`;
   const cached = responseCache.get(cacheKey);
   if (cached) {
     console.log(`⚡ AI cache hit: "${query}"`);
