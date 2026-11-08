@@ -43,6 +43,15 @@ const OLLAMA_LLM_MODEL = process.env.OLLAMA_LLM_MODEL || 'qwen2.5:3b';
 // gpt-4.1-nano و gpt-image-1 يتوقفان في 2026-10-23 (إشعار OpenAI)
 const LLM_MODEL   = process.env.OPENAI_LLM_MODEL   || 'gpt-4.1';
 const IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1-mini';
+// موديلات التفكير (gpt-5+ / gpt-6 / o-series) ترفض temperature وmax_tokens
+const IS_REASONING_LLM = /^(gpt-[5-9]|od)/i.test(LLM_MODEL);
+const LLM_REASONING_EFFORT = process.env.OPENAI_REASONING_EFFORT || 'none';
+function llmParams(temperature, maxTokens) {
+  if (IS_REASONING_LLM) {
+    return { reasoning_effort: LLM_REASONING_EFFORT, ...(maxTokens ? { max_completion_tokens: maxTokens } : {}) };
+  }
+  return { temperature, ...(maxTokens ? { max_tokens: maxTokens } : {}) };
+}
 
 async function localEmbed(text) {
   const res = await fetch(`${OLLAMA_URL}/api/embeddings`, {
@@ -149,8 +158,7 @@ async function translateForClip(arabicQuery) {
         role: 'user',
         content: `Translate this Arabic product search to short English (just the product noun(s), nothing else). Examples: "ثلاجة" → "refrigerator", "ماكينة قهوة" → "coffee machine", "قلاية هوائية" → "air fryer", "ترمس" → "thermos".\n\nArabic: "${arabicQuery}"\nEnglish:`,
       }],
-      temperature: 0,
-      max_tokens: 30,
+      ...llmParams(0, 30),
     });
     const translated = (r.choices[0]?.message?.content || '').trim().replace(/^["']|["']$/g, '');
     translationCache.set(key, translated);
@@ -649,9 +657,8 @@ async function cohereChat({ prompt, history = [], jsonMode = true, temperature =
   const completion = await openai.chat.completions.create({
     model: LLM_MODEL,
     messages,
-    temperature,
+    ...llmParams(temperature, maxTokens),
     response_format: jsonMode ? { type: 'json_object' } : undefined,
-    max_tokens: maxTokens,
   });
   return completion.choices[0].message.content;
 }
