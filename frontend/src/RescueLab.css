@@ -1,0 +1,33 @@
+.rl-page { max-width: 820px; margin: 0 auto; padding: 1rem; }
+.rl-title { font-size: 1.6rem; margin: 0.5rem 0 0.25rem; }
+.rl-sub { color: #666; margin: 0 0 1rem; }
+.rl-form { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+.rl-input { flex: 1; min-width: 0; padding: 0.75rem 1rem; font-size: 1rem; border: 1px solid #ddd; border-radius: 12px; font-family: inherit; }
+.rl-input:focus { outline: none; border-color: #2563eb; }
+.rl-btn { padding: 0.75rem 1.5rem; font-size: 1rem; border: none; border-radius: 12px; background: #2563eb; color: #fff; cursor: pointer; font-family: inherit; }
+.rl-btn:disabled { background: #9db6ee; cursor: default; }
+.rl-error { background: #fdecec; color: #a11; padding: 0.75rem 1rem; border-radius: 10px; margin-bottom: 1rem; }
+.rl-card { background: #fff; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,.08); padding: 1rem 1.25rem; margin-bottom: 1rem; }
+.rl-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
+.rl-query { font-size: 1.15rem; font-weight: 700; }
+.rl-meta { color: #888; font-size: 0.85rem; }
+.rl-verdict { margin: 0.75rem 0; padding: 0.6rem 0.9rem; border-radius: 10px; }
+.rl-verdict.ok { background: #e9f7ee; color: #14632f; }
+.rl-verdict.none { background: #f3f3f3; color: #555; }
+.rl-steps { margin: 0; padding-inline-start: 1.25rem; }
+.rl-steps > li { margin-bottom: 0.75rem; }
+.rl-step-title { font-weight: 700; margin-bottom: 0.25rem; }
+.rl-step-body { color: #333; line-height: 1.8; }
+.rl-chip { display: inline-block; background: #eef3ff; color: #1d4ed8; border-radius: 999px; padding: 0.1rem 0.7rem; margin: 0 0.15rem; }
+.rl-muted { color: #888; }
+.rl-gate.ok { color: #14632f; }
+.rl-gate.bad { color: #a11; }
+.rl-attempt { margin-bottom: 0.4rem; }
+.rl-link { background: none; border: none; color: #2563eb; cursor: pointer; font-family: inherit; font-size: 0.9rem; margin-inline-start: 0.5rem; padding: 0; }
+.rl-judged { list-style: none; margin: 0.4rem 0 0; padding: 0.5rem 0.75rem; background: #fafafa; border-radius: 10px; font-size: 0.9rem; max-height: 320px; overflow-y: auto; }
+.rl-judged li.ok { color: #14632f; }
+.rl-judged li.bad { color: #999; }
+@media (max-width: 600px) {
+  .rl-form { flex-direction: column; }
+  .rl-btn { width: 100%; }
+}

@@ -3366,11 +3366,13 @@ function getRescueProductTypes() {
   return list;
 }
 
-async function aiRescueTerms(query) {
+// info (اختياري): يملأ تفاصيل كل خطوة لصفحة "إنقاذ الذكاء الصناعي"، ويتجاوز الكاش
+async function aiRescueTerms(query, info = null) {
   const key = (query || '').trim().toLowerCase();
-  if (rescueCache.has(key)) return rescueCache.get(key);
+  if (!info && rescueCache.has(key)) return rescueCache.get(key);
 
   const types = getRescueProductTypes();
+  if (info) info.typesCount = types.length;
   const allowed = new Set(types.map(t => normalizeArab(t.toLowerCase())));
 
   const prompt = `العميل بحث في متجر أدوات منزلية وأجهزة كهربائية سعودي عن: "${query}"
@@ -3389,6 +3391,7 @@ JSON: {"terms": ["..."]}`;
   const text = await cohereChat({ prompt, jsonMode: true, temperature: 0, maxTokens: 120 });
   const parsed = JSON.parse(text);
   const terms = Array.isArray(parsed.terms) ? parsed.terms.slice(0, RESCUE_MAX_TERMS) : [];
+  if (info) { info.proposed = terms.map(t => String(t || '').trim()).filter(Boolean); info.gates = []; }
 
   // 🛡️ نتحقق من كل مقترح ونحافظ على ترتيب الموديل (الأقرب أولاً)
   const valid = [];
@@ -3398,11 +3401,17 @@ JSON: {"terms": ["..."]}`;
     // 🛡️ بوّابة ١: من قائمة أنواع منتجاتنا — يمنع الاختلاق
     if (!allowed.has(normalizeArab(term.toLowerCase()))) {
       console.log(`🚑 rejected (outside catalog): "${term}"`);
+      if (info) info.gates.push({ term, ok: false, reason: 'outside_catalog' });
       continue;
     }
     // 🛡️ بوّابة ٢: يجب أن يُرجع منتجين حقيقيين على الأقل
     const cnt = await quickCountForQuery(term);
-    if (cnt < 2) { console.log(`🚑 rejected (${cnt} products): "${term}"`); continue; }
+    if (cnt < 2) {
+      console.log(`🚑 rejected (${cnt} products): "${term}"`);
+      if (info) info.gates.push({ term, ok: false, reason: 'too_few_products', count: cnt });
+      continue;
+    }
+    if (info) info.gates.push({ term, ok: true, count: cnt });
     valid.push(term);
   }
 
@@ -3412,8 +3421,9 @@ JSON: {"terms": ["..."]}`;
 }
 
 // 🛡️ بوّابة ٤: فحص الصلة — يُبقي فقط المنتجات التي تخدم حاجة العميل
-async function filterRescueByRelevance(query, products) {
+async function filterRescueByRelevance(query, products, info = null) {
   const sample = rankByQueryWords(query, products).slice(0, RESCUE_JUDGE_TITLES);
+  if (info) { info.candidates = products.length; info.judged = []; }
   if (sample.length === 0) return [];
   const list = sample.map((p, i) => `${i + 1}. ${p.title}`).join('\n');
 
@@ -3438,7 +3448,47 @@ JSON: {"relevant": [1, 2]}`;
       .map(Number)
       .filter(n => Number.isInteger(n) && n >= 1 && n <= sample.length)
   );
+  if (info) info.judged = sample.map((p, i) => ({ title: p.title, accepted: ids.has(i + 1) }));
   return sample.filter((_, i) => ids.has(i + 1));
+}
+
+// 🚑 الإنقاذ كاملاً: الذكاء الصناعي يقترح أنواعاً، ثم لكل نوع: استرجاع → فلاتر → فحص صلة.
+// أول نوع له منتجات مقبولة يفوز. info (اختياري) يجمع تفاصيل كل خطوة.
+async function runRescue(query, deviceKeyword, limit, info = null) {
+  const terms = await aiRescueTerms(query, info);
+  if (info) info.attempts = [];
+  for (const term of terms) {
+    let rescued = await retrieveProductsFor(term, limit);
+    const retrieved = rescued.length;
+    rescued = rescued.filter(p => !isAccessory(p.title, deviceKeyword, term));
+    // 🛡️ بوّابة ٣: صلة صارمة — كل كلمة من المصطلح تظهر فعلاً في العنوان.
+    // بدونها يُسرّب multi_match الضبابي نتائج بعيدة ("ايس" → "ايا كلين").
+    const termWords = term.split(/\s+/)
+      .map(w => normalizeArab(w.toLowerCase()))
+      .filter(w => w.length >= 3);
+    if (termWords.length > 0) {
+      rescued = rescued.filter(p => {
+        const t = normalizeArab(String(p.title || '').toLowerCase());
+        return termWords.every(w => t.includes(w));
+      });
+    }
+    const seenRescue = new Set();
+    rescued = rescued.filter(p => {
+      const k = (p.title || '').trim().toLowerCase();
+      if (seenRescue.has(k)) return false;
+      seenRescue.add(k);
+      return true;
+    });
+    const judge = info ? {} : null;
+    const relevant = await filterRescueByRelevance(query, rescued, judge);
+    if (info) info.attempts.push({ term, retrieved, afterFilters: rescued.length, accepted: relevant.length, judged: judge.judged });
+    if (relevant.length > 0) {
+      console.log(`🚑 rescued "${query}" → "${term}": ${relevant.length} products`);
+      return { terms, term, products: relevant };
+    }
+    console.log(`🚑 rejected (not relevant): "${term}" — ${rescued.length} candidates`);
+  }
+  return { terms, term: null, products: [] };
 }
 
 // استرجاع موحّد لنص بحث (kNN + نصي) — يُستخدم في إعادة البحث
@@ -3899,36 +3949,11 @@ app.get('/search', async (req, res) => {
     if (products.length === 0 && req.query.skipRescue !== 'true') {
       try {
         const rescueT0 = Date.now();
-        const terms = await aiRescueTerms(query);
-        for (const term of terms) {
-          let rescued = await retrieveProductsFor(term, limit);
-          rescued = rescued.filter(p => !isAccessory(p.title, searchType.deviceKeyword, term));
-          // 🛡️ بوّابة ٣: صلة صارمة — كل كلمة من المصطلح تظهر فعلاً في العنوان.
-          // بدونها يُسرّب multi_match الضبابي نتائج بعيدة ("ايس" → "ايا كلين").
-          const termWords = term.split(/\s+/)
-            .map(w => normalizeArab(w.toLowerCase()))
-            .filter(w => w.length >= 3);
-          if (termWords.length > 0) {
-            rescued = rescued.filter(p => {
-              const t = normalizeArab(String(p.title || '').toLowerCase());
-              return termWords.every(w => t.includes(w));
-            });
-          }
-          const seenRescue = new Set();
-          rescued = rescued.filter(p => {
-            const k = (p.title || '').trim().toLowerCase();
-            if (seenRescue.has(k)) return false;
-            seenRescue.add(k);
-            return true;
-          });
-          const relevant = await filterRescueByRelevance(query, rescued);
-          if (relevant.length > 0) {
-            products = relevant;
-            aiRescue = { from: query, to: term, count: relevant.length, ms: Date.now() - rescueT0 };
-            console.log(`🚑 rescued "${query}" → "${term}": ${relevant.length} products in ${aiRescue.ms}ms`);
-            break;
-          }
-          console.log(`🚑 rejected (not relevant): "${term}" — ${rescued.length} candidates`);
+        const rescue = await runRescue(query, searchType.deviceKeyword, limit);
+        const terms = rescue.terms;
+        if (rescue.term) {
+          products = rescue.products;
+          aiRescue = { from: query, to: rescue.term, count: rescue.products.length, ms: Date.now() - rescueT0 };
         }
         trace('ai_rescue', { from: query, terms, to: aiRescue?.to || null, count: aiRescue?.count || 0, ms: Date.now() - rescueT0 });
       } catch (e) {
@@ -4031,6 +4056,40 @@ app.get('/search', async (req, res) => {
       message: 'Search failed',
       error: error.message,
     });
+  }
+});
+
+// 🚑 /rescue/inspect — صفحة "إنقاذ الذكاء الصناعي": يشغّل الإنقاذ على الجملة (حتى لو لها نتائج)
+// ويُرجع كل خطوة: ما اقترحه الموديل، البوّابات، وحكم الصلة على كل منتج. بدون كاش.
+app.get('/rescue/inspect', async (req, res) => {
+  const query = String(req.query.q || '').trim().slice(0, 200);
+  if (!query) return res.status(400).json({ error: 'q مطلوب' });
+  const t0 = Date.now();
+  try {
+    const [searchType, strictCount] = await Promise.all([
+      classifySearchType(query),
+      quickCountForQuery(query),
+    ]);
+    const info = {};
+    const rescue = await runRescue(query, searchType.deviceKeyword, 500, info);
+    res.json({
+      query,
+      model: LLM_MODEL,
+      strictCount,
+      typesCount: info.typesCount || 0,
+      proposed: info.proposed || [],
+      gates: info.gates || [],
+      attempts: (info.attempts || []).map(a => ({
+        term: a.term, retrieved: a.retrieved, afterFilters: a.afterFilters, accepted: a.accepted,
+        judged: a.judged || [],
+      })),
+      chosen: rescue.term,
+      acceptedCount: rescue.products.length,
+      ms: Date.now() - t0,
+    });
+  } catch (e) {
+    console.warn('🚑 inspect failed:', e.message);
+    res.status(500).json({ error: e.message, ms: Date.now() - t0 });
   }
 });
 

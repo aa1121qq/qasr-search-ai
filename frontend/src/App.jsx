@@ -4,6 +4,7 @@ import './App.css'
 import DeveloperMode from './DeveloperMode.jsx'
 import TansiqDevMode from './TansiqDevMode.jsx'
 import ImageCropper from './ImageCropper.jsx'
+import RescueLab from './RescueLab.jsx'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 
@@ -833,8 +834,18 @@ function App() {
       >
         📊 تقرير البحث
       </button>
+      <button
+        className={`mode-switch-btn ${mode === 'rescue' ? 'active' : ''}`}
+        onClick={() => setMode('rescue')}
+      >
+        🚑 إنقاذ الذكاء الصناعي
+      </button>
     </div>
   )
+
+  if (mode === 'rescue') {
+    return <RescueLab apiUrl={API_URL} modeSwitch={modeSwitch} />
+  }
 
   if (mode === 'dashboard') {
     return (
