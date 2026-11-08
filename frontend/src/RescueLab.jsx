@@ -17,10 +17,14 @@ function RescueResult({ r }) {
         <span className="rl-meta">{(r.ms / 1000).toFixed(1)} ث · {r.model}</span>
       </div>
 
-      <div className={`rl-verdict ${r.chosen ? 'ok' : 'none'}`}>
-        {r.chosen
-          ? <>✅ الإنقاذ يعرض: <b>«{r.chosen}»</b> — {r.acceptedCount} منتج مقبول</>
-          : <>⛔ ما في إنقاذ — العميل يشوف صفحة "لم نجد نتائج"</>}
+      <div className={`rl-verdict ${r.spell?.count > 0 || r.chosen ? 'ok' : 'none'}`}>
+        {r.spell?.count >= 5
+          ? <>✍️ التصحيح الإملائي يكفي: العميل يشوف {r.spell.count} منتج لـ <b>«{r.spell.to}»</b> — والإنقاذ ما يحتاج يشتغل</>
+          : r.chosen
+            ? <>✅ {r.spell?.count > 0 && <>{r.spell.count} منتج من التصحيح «{r.spell.to}»، وبعدها </>}الإنقاذ يعرض: <b>«{r.chosen}»</b> — {r.acceptedCount} منتج مقبول</>
+            : r.spell?.count > 0
+              ? <>✍️ العميل يشوف {r.spell.count} منتج لـ <b>«{r.spell.to}»</b> — والإنقاذ ما لقى إضافة</>
+              : <>⛔ ما في إنقاذ — العميل يشوف صفحة "لم نجد نتائج"</>}
       </div>
 
       <ol className="rl-steps">
@@ -30,6 +34,15 @@ function RescueResult({ r }) {
             {r.strictCount > 0
               ? <>الجملة نفسها تطابق {r.strictCount} منتج حرفياً — في الموقع الإنقاذ ما يشتغل إلا لو النتائج صفر.</>
               : <>ما في منتج يحتوي كل كلمات الجملة.</>}
+          </div>
+        </li>
+        <li>
+          <div className="rl-step-title">التصحيح الإملائي</div>
+          <div className="rl-step-body">
+            {r.spell?.to
+              ? <>صحّحها الذكاء الصناعي إلى <span className="rl-chip">{r.spell.to}</span> — البحث بها جاب {r.spell.candidates} منتج، وفحص الصلة قبل <b>{r.spell.count}</b>
+                  {r.spell.count < 5 && <span className="rl-muted"> (أقل من 5، فيكمل الإنقاذ على الجملة المصححة)</span>}</>
+              : <span className="rl-muted">ما لقى خطأ إملائي — يكمل الإنقاذ على الجملة كما هي.</span>}
           </div>
         </li>
         <li>

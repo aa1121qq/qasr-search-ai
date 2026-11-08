@@ -109,6 +109,7 @@ function App() {
   const [didYouMean, setDidYouMean] = useState(null)
   // 🚑 إنقاذ النتائج الصفرية: المصطلح البديل الذي اختاره الذكاء من كتالوجنا
   const [aiRescue, setAiRescue] = useState(null)
+  const [aiSpell, setAiSpell] = useState(null)
   const [activeBrand, setActiveBrand] = useState(null)
   const [activeSize, setActiveSize] = useState(null)
   const [activeThird, setActiveThird] = useState(null)
@@ -223,6 +224,7 @@ function App() {
     setRelatedSearches([])
     setDidYouMean(null)
     setAiRescue(null)
+    setAiSpell(null)
     setActiveBrand(null)
     setActiveSize(null)
     setActiveThird(null)
@@ -244,6 +246,7 @@ function App() {
       const fastDuration = Date.now() - tFastStart
       setAllProducts(response.data.products || [])
       setAiRescue(response.data.aiRescue || null)
+      setAiSpell(response.data.aiSpell?.count > 0 ? response.data.aiSpell : null)
       setSearchType(response.data.searchType || 'general')
       setFilters(prev => ({
         ...prev,
@@ -515,6 +518,7 @@ function App() {
           setRelatedSearches([])
           setDidYouMean(null)
           setAiRescue(null)
+          setAiSpell(null)
           setDisplayCount(INITIAL_COUNT)
         } else if (response.data.success && response.data.query) {
           // legacy: نص → بحث عادي (لم يعد المسار الافتراضي لكن نحتفظ به للأمان)
@@ -1019,7 +1023,13 @@ function App() {
         </div>
       )}
 
-      {didYouMean && !aiRescue && !loading && (
+      {aiSpell && !aiRescue && !loading && (
+        <div className="ai-rescue-note">
+          صحّحنا بحثك إلى <strong>«{aiSpell.to}»</strong>
+        </div>
+      )}
+
+      {didYouMean && !aiRescue && !aiSpell && !loading && (
         <div className="did-you-mean">
           هل تقصد:{' '}
           <button

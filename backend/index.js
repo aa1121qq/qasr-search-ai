@@ -3491,6 +3491,69 @@ async function runRescue(query, deviceKeyword, limit, info = null) {
   return { terms, term: null, products: [] };
 }
 
+// 🔁 إعادة بحث بنص مصحح، مع نفس فلاتر البحث الأصلي (إكسسوارات، مقاس، موضوع، أوصاف)
+async function researchCorrected(text, originalQuery, deviceKeyword, limit) {
+  const emb = await getQueryEmbedding(text);
+  const clip = await clipTextEmbedding(await translateForClip(text)).catch(() => null);
+  const knn = [{ field: 'embedding', query_vector: emb, k: limit, num_candidates: Math.min(limit * 2, 1000), boost: 1.5 }];
+  if (clip) knn.push({ field: 'clip_image_embedding', query_vector: clip, k: limit, num_candidates: Math.min(limit * 2, 1000), boost: 1.5 });
+  const result = await esClient.search({
+    index: INDEX_NAME, size: limit,
+    _source: ['title', 'image_link', 'price', 'sale_price', 'brand', 'link', 'color', 'size', 'product_kind', 'product_subtype', 'product_tags', 'product_material'],
+    query: { multi_match: { query: text, fields: ['title^2', 'brand', 'color', 'size'], fuzziness: 'AUTO', operator: 'or', minimum_should_match: '50%' } },
+    knn,
+  });
+  let list = result.hits.hits.map((hit) => {
+    const discount = getDiscountInfo(hit._source.price, hit._source.sale_price);
+    return {
+      id: hit._id, score: hit._score, title: hit._source.title, image_link: hit._source.image_link,
+      price: discount.hasDiscount ? hit._source.sale_price : hit._source.price,
+      originalPrice: discount.hasDiscount ? hit._source.price : null,
+      discountPercentage: discount.discountPercentage, hasDiscount: discount.hasDiscount,
+      brand: hit._source.brand, link: hit._source.link, color: hit._source.color || '', size: hit._source.size || '',
+      product_kind: hit._source.product_kind || null, product_subtype: hit._source.product_subtype || null,
+      product_tags: hit._source.product_tags || [], product_material: hit._source.product_material || null,
+    };
+  });
+  list = list.filter(p => !isAccessory(p.title, deviceKeyword, originalQuery));
+  if (queryIsLargeAppliance(text)) list = list.filter(p => !isUndersizedForLargeAppliance(p.title));
+  const subject = extractSubject(text);
+  if (subject) list = list.filter(p => titleMatchesSubject(p.title, subject));
+  list = applyModifierFilters(text, list);
+  const seen = new Set();
+  return list.filter(p => { const k = (p.title || '').toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+}
+
+// ✍️ تصحيح إملائي بالذكاء الصناعي: يصحح الكتابة فقط، لا يغيّر المعنى ولا يضيف كلمات.
+// يُرجع الجملة المصححة، أو null لو ما فيها خطأ.
+const aiSpellCache = new Map();
+async function aiSpellFix(query) {
+  const key = (query || '').trim().toLowerCase();
+  if (!key) return null;
+  if (aiSpellCache.has(key)) return aiSpellCache.get(key);
+
+  const prompt = `أنت مدقق إملائي لبحث متجر أدوات منزلية وأجهزة كهربائية سعودي.
+العميل كتب: "${query}"
+
+صحّح الأخطاء الإملائية فقط، بالكتابة الشائعة لأسماء المنتجات في المتاجر السعودية.
+لا تغيّر المعنى، ولا تضف كلمات، ولا تحذف كلمات، ولا تستبدل المنتج بمنتج آخر.
+لو الجملة صحيحة، أعِدها كما هي.
+أمثلة: "اله اسبرسوا صغيره" ← "آلة إسبريسو صغيرة" · "قلايه هوايه" ← "قلاية هوائية" · "مكوى بخار" ← "مكواة بخار"
+
+JSON: {"corrected": "..."}`;
+
+  const text = await cohereChat({ prompt, jsonMode: true, temperature: 0, maxTokens: 100 });
+  const parsed = JSON.parse(text);
+  let fixed = String(parsed.corrected || '').trim().slice(0, 200);
+  const norm = s => normalizeArabicText(s).replace(/\s+/g, ' ').trim();
+  // 🛡️ نفس الجملة، أو تغيّر عدد الكلمات بأكثر من واحدة ⇒ نتجاهله
+  const qWords = key.split(/\s+/).length, fWords = fixed.split(/\s+/).filter(Boolean).length;
+  if (!fixed || norm(fixed) === norm(query) || Math.abs(fWords - qWords) > 1) fixed = null;
+  if (aiSpellCache.size >= 1000) aiSpellCache.delete(aiSpellCache.keys().next().value);
+  aiSpellCache.set(key, fixed);
+  return fixed;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // 🕰️ الإنقاذ الأصلي (قبل تعديلات 2026-11-05) — للعرض في صفحة الإنقاذ فقط، لا يستخدمه /search
 // المفردات من أقرب 30 منتج للجملة، الموديل يركّب منها مصطلحاً، ولا يوجد فحص صلة.
@@ -3707,7 +3770,7 @@ app.get('/search', async (req, res) => {
   }
 
   // ⚡ كاش الاستجابة الكاملة — الـ hit يجيب الرد فوراً
-  const responseCacheKey = `v8|${INDEX_NAME}|${query.toLowerCase().trim()}|${(synonymApplied ? synonymApplied.from : '').toLowerCase().trim()}|${limit}|${skipIntent ? '1' : '0'}|${skipAI ? '1' : '0'}|k=${filterKind || ''}|s=${filterSubtype || ''}|t=${filterTag || ''}|m=${filterMaterial || ''}`;
+  const responseCacheKey = `v9|${INDEX_NAME}|${query.toLowerCase().trim()}|${(synonymApplied ? synonymApplied.from : '').toLowerCase().trim()}|${limit}|${skipIntent ? '1' : '0'}|${skipAI ? '1' : '0'}|k=${filterKind || ''}|s=${filterSubtype || ''}|t=${filterTag || ''}|m=${filterMaterial || ''}`;
   const cachedResponse = responseCache.get(responseCacheKey);
   if (cachedResponse) {
     console.log(`⚡ Response cache hit: "${query}"`);
@@ -4016,39 +4079,7 @@ app.get('/search', async (req, res) => {
     // وندمج النتائج، بحيث المنتجات تظهر دائماً حتى لو المستخدم كتب خطأ
     if (correctedQuery && products.length < 5) {
       try {
-        const reSearchEmbedding = await getQueryEmbedding(correctedQuery);
-        const reSearchClip = await clipTextEmbedding(await translateForClip(correctedQuery)).catch(() => null);
-        const reSearchKnn = [{ field: 'embedding', query_vector: reSearchEmbedding, k: limit, num_candidates: Math.min(limit * 2, 1000), boost: 1.5 }];
-        if (reSearchClip) reSearchKnn.push({ field: 'clip_image_embedding', query_vector: reSearchClip, k: limit, num_candidates: Math.min(limit * 2, 1000), boost: 1.5 });
-        const reSearchResult = await esClient.search({
-          index: INDEX_NAME, size: limit,
-          _source: ['title', 'image_link', 'price', 'sale_price', 'brand', 'link', 'color', 'size', 'product_kind', 'product_subtype', 'product_tags', 'product_material'],
-          query: { multi_match: { query: correctedQuery, fields: ['title^2', 'brand', 'color', 'size'], fuzziness: 'AUTO', operator: 'or', minimum_should_match: '50%' } },
-          knn: reSearchKnn,
-        });
-        const corrProducts = reSearchResult.hits.hits.map((hit) => {
-          const discount = getDiscountInfo(hit._source.price, hit._source.sale_price);
-          return {
-            id: hit._id, score: hit._score, title: hit._source.title, image_link: hit._source.image_link,
-            price: discount.hasDiscount ? hit._source.sale_price : hit._source.price,
-            originalPrice: discount.hasDiscount ? hit._source.price : null,
-            discountPercentage: discount.discountPercentage, hasDiscount: discount.hasDiscount,
-            brand: hit._source.brand, link: hit._source.link, color: hit._source.color || '', size: hit._source.size || '',
-            product_kind: hit._source.product_kind || null, product_subtype: hit._source.product_subtype || null,
-            product_tags: hit._source.product_tags || [], product_material: hit._source.product_material || null,
-          };
-        });
-        // طبّق نفس فلاتر النص الأصلي على النتائج الجديدة
-        let filteredCorr = corrProducts.filter(p => !isAccessory(p.title, searchType.deviceKeyword, query));
-        if (queryIsLargeAppliance(correctedQuery)) {
-          filteredCorr = filteredCorr.filter(p => !isUndersizedForLargeAppliance(p.title));
-        }
-        const corrSubject = extractSubject(correctedQuery);
-        if (corrSubject) filteredCorr = filteredCorr.filter(p => titleMatchesSubject(p.title, corrSubject));
-        filteredCorr = applyModifierFilters(correctedQuery, filteredCorr);
-        // dedup
-        const seen = new Set();
-        filteredCorr = filteredCorr.filter(p => { const k = (p.title||'').toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+        const filteredCorr = await researchCorrected(correctedQuery, query, searchType.deviceKeyword, limit);
         if (filteredCorr.length > products.length) {
           console.log(`🔁 re-search with "${correctedQuery}": ${products.length} → ${filteredCorr.length} products`);
           products = filteredCorr;
@@ -4058,16 +4089,43 @@ app.get('/search', async (req, res) => {
       }
     }
 
+    // ✍️ تصحيح إملائي بالذكاء الصناعي — عند الصفر فقط، قبل الإنقاذ.
+    // نعيد البحث بالجملة المصححة؛ ولو بقيت صفراً يكمل الإنقاذ على الجملة المصححة.
+    let aiSpell = null;
+    if (products.length === 0 && req.query.skipRescue !== 'true') {
+      try {
+        const spellT0 = Date.now();
+        const fixed = await aiSpellFix(query);
+        if (fixed) {
+          const found = await researchCorrected(fixed, query, searchType.deviceKeyword, limit);
+          // 🛡️ فحص صلة: "آلة إسبريسو" لا تعرض أكواب إسبريسو، و"مكواة بخار" لا تعرض حاملة مكواة
+          const relevant = found.length ? await filterRescueByRelevance(fixed, found) : [];
+          aiSpell = { from: query, to: fixed, count: relevant.length, candidates: found.length, ms: Date.now() - spellT0 };
+          if (relevant.length > 0) {
+            products = relevant;
+            console.log(`✍️ ai spell "${query}" → "${fixed}": ${relevant.length}/${found.length} products`);
+          }
+        }
+        trace('ai_spell', { from: query, to: fixed || null, count: aiSpell?.count || 0, ms: Date.now() - spellT0 });
+      } catch (e) {
+        rescueErrored = true;
+        console.warn('✍️ ai spell failed:', e.message);
+      }
+    }
+
     // 🚑 إنقاذ بالذكاء الاصطناعي — آخر درجة في السُلّم، بعد المرادفات
     // والتصحيح الإملائي وإعادة البحث. يعمل فقط عند الصفر المطلق، وقفزة واحدة
     // بلا تكرار. للتعطيل: ?skipRescue=true
-    if (products.length === 0 && req.query.skipRescue !== 'true') {
+    // يعمل أيضاً لو التصحيح الإملائي جاب أقل من 5 منتجات، ونضيف نتائجه بعدها
+    const spellTooFew = aiSpell && aiSpell.count > 0 && aiSpell.count < 5;
+    if ((products.length === 0 || spellTooFew) && req.query.skipRescue !== 'true') {
       try {
         const rescueT0 = Date.now();
-        const rescue = await runRescue(query, searchType.deviceKeyword, limit);
+        const rescue = await runRescue(aiSpell?.to || query, searchType.deviceKeyword, limit);
         const terms = rescue.terms;
         if (rescue.term) {
-          products = rescue.products;
+          const seenIds = new Set(products.map(p => p.id));
+          products = [...products, ...rescue.products.filter(p => !seenIds.has(p.id))];
           aiRescue = { from: query, to: rescue.term, count: rescue.products.length, ms: Date.now() - rescueT0 };
         }
         trace('ai_rescue', { from: query, terms, to: aiRescue?.to || null, count: aiRescue?.count || 0, ms: Date.now() - rescueT0 });
@@ -4153,6 +4211,7 @@ app.get('/search', async (req, res) => {
       },
       relatedSearches: relatedSearches,
       didYouMean: didYouMean,
+      aiSpell: aiSpell,
       aiRescue: aiRescue,
     };
     if (wantDebug) {
@@ -4185,12 +4244,21 @@ app.get('/rescue/inspect', async (req, res) => {
       classifySearchType(query),
       quickCountForQuery(query),
     ]);
+    // ✍️ نفس ترتيب /search: التصحيح الإملائي أولاً، ثم الإنقاذ على الجملة المصححة
+    const fixed = await aiSpellFix(query);
+    let spellCount = 0, spellCandidates = 0;
+    if (fixed) {
+      const found = await researchCorrected(fixed, query, searchType.deviceKeyword, 500);
+      spellCandidates = found.length;
+      spellCount = found.length ? (await filterRescueByRelevance(fixed, found)).length : 0;
+    }
     const info = {};
-    const rescue = await runRescue(query, searchType.deviceKeyword, 500, info);
+    const rescue = await runRescue(fixed || query, searchType.deviceKeyword, 500, info);
     res.json({
       query,
       model: LLM_MODEL,
       strictCount,
+      spell: { to: fixed, count: spellCount, candidates: spellCandidates },
       typesCount: info.typesCount || 0,
       proposed: info.proposed || [],
       gates: info.gates || [],
@@ -4230,7 +4298,7 @@ app.get('/search/ai', async (req, res) => {
   }
 
   // كاش
-  const cacheKey = `ai5|${INDEX_NAME}|${query.toLowerCase().trim()}|${skipIntent ? '1' : '0'}`;
+  const cacheKey = `ai6|${INDEX_NAME}|${query.toLowerCase().trim()}|${skipIntent ? '1' : '0'}`;
   const cached = responseCache.get(cacheKey);
   if (cached) {
     console.log(`⚡ AI cache hit: "${query}"`);
