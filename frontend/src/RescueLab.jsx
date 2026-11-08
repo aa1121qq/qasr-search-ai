@@ -15,6 +15,7 @@ const GATE_REASON = {
 function RescueResult({ r }) {
   const [openShown, setOpenShown] = useState(false)
   const [openNear, setOpenNear] = useState(false)
+  const [openSpell, setOpenSpell] = useState(false)
   return (
     <div className="rl-card">
       <div className="rl-card-head">
@@ -24,10 +25,12 @@ function RescueResult({ r }) {
         </span>
       </div>
 
-      <div className={`rl-verdict ${r.chosen ? 'ok' : 'none'}`}>
-        {r.chosen
-          ? <>✅ الإنقاذ يعرض: <b>«{r.chosen}»</b> — {r.shownCount} منتج</>
-          : <>⛔ ما في إنقاذ — العميل يشوف صفحة "لم نجد نتائج"</>}
+      <div className={`rl-verdict ${r.spell?.count > 0 || r.chosen ? 'ok' : 'none'}`}>
+        {r.spell?.count > 0
+          ? <>✍️ التصحيح الإملائي يكفي: يعرض <b>«{r.spell.to}»</b> — {r.spell.count} منتج</>
+          : r.chosen
+            ? <>✅ الإنقاذ يعرض: <b>«{r.chosen}»</b> — {r.shownCount} منتج</>
+            : <>⛔ ما في إنقاذ — العميل يشوف صفحة "لم نجد نتائج"</>}
       </div>
 
       <ol className="rl-steps">
@@ -39,6 +42,19 @@ function RescueResult({ r }) {
               : <>ما في منتج يحتوي كل كلمات الجملة.</>}
           </div>
         </li>
+        <li>
+          <div className="rl-step-title">التصحيح الإملائي</div>
+          <div className="rl-step-body">
+            {r.spell?.to
+              ? <>صحّحها الذكاء الصناعي إلى <span className="rl-chip">{r.spell.to}</span> — إعادة البحث جابت <b>{r.spell.count}</b> منتج
+                  {r.spell.count > 0
+                    ? <button className="rl-link" onClick={() => setOpenSpell(!openSpell)}>{openSpell ? 'إخفاء' : 'وش هي؟'}</button>
+                    : <span className="rl-muted"> (صفر، فيكمل الإنقاذ على الجملة المصححة)</span>}
+                  {openSpell && <ul className="rl-judged">{r.spell.shown.map((t, i) => <li key={i}>{t}</li>)}</ul>}</>
+              : <span className="rl-muted">ما لقى خطأ إملائي — يكمل الإنقاذ على الجملة كما هي.</span>}
+          </div>
+        </li>
+        {r.stop !== 'spell_found' && <>
         <li>
           <div className="rl-step-title">أقرب 30 منتج للجملة</div>
           <div className="rl-step-body">
@@ -83,6 +99,7 @@ function RescueResult({ r }) {
             </div>
           </li>
         )}
+        </>}
       </ol>
     </div>
   )

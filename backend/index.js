@@ -3486,6 +3486,39 @@ async function researchCorrected(text, originalQuery, deviceKeyword, limit) {
   return list.filter(p => { const k = (p.title || '').toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
 }
 
+// ✍️ الخطوة الأولى في الإنقاذ: تصحيح إملائي بالذكاء الصناعي.
+// يصحح الكتابة فقط — لا يغيّر المعنى ولا يضيف كلمات. يُرجع الجملة المصححة، أو null.
+const aiSpellCache = new Map();
+async function aiSpellFix(query, model = null) {
+  const key = (query || '').trim().toLowerCase();
+  if (!key) return null;
+  const cacheKey = `${model || ''}|${key}`;
+  if (aiSpellCache.has(cacheKey)) return aiSpellCache.get(cacheKey);
+
+  const prompt = `أنت مدقق إملائي لبحث متجر أدوات منزلية وأجهزة كهربائية سعودي.
+العميل كتب: "${query}"
+
+صحّح الأخطاء الإملائية فقط، بالكتابة الشائعة لأسماء المنتجات في المتاجر السعودية.
+افصل الكلمات الملتصقة. لا تغيّر المعنى، ولا تضف كلمات، ولا تستبدل المنتج بمنتج آخر.
+لو الجملة صحيحة، أعِدها كما هي.
+أمثلة: "مكاين سبرسو" ← "مكاين إسبريسو" · "قلايه هوايه" ← "قلاية هوائية" · "جدرظغط غيرلاصق" ← "قدر ضغط غير لاصق"
+
+JSON: {"corrected": "..."}`;
+
+  const text = await cohereChat({ prompt, jsonMode: true, temperature: 0, maxTokens: 100, model });
+  const parsed = JSON.parse(text);
+  let fixed = String(parsed.corrected || '').trim().slice(0, 200);
+  const norm = s => normalizeArabicText(s).replace(/\s+/g, ' ').trim();
+  // 🛡️ نفس الجملة ⇒ لا تصحيح. ونقارن عدد الحروف بدون مسافات (لا عدد الكلمات):
+  // فصل الكلمات الملتصقة مسموح، وإضافة كلمات جديدة ممنوعة.
+  const letters = s => normalizeArabicText(s).replace(/[^ء-يa-z0-9]/gi, '').length;
+  const qLen = letters(query), fLen = fixed ? letters(fixed) : 0;
+  if (!fixed || norm(fixed) === norm(query) || Math.abs(fLen - qLen) > Math.ceil(qLen / 3) + 2) fixed = null;
+  if (aiSpellCache.size >= 1000) aiSpellCache.delete(aiSpellCache.keys().next().value);
+  aiSpellCache.set(cacheKey, fixed);
+  return fixed;
+}
+
 // استرجاع موحّد لنص بحث (kNN + نصي) — يُستخدم في إعادة البحث
 async function retrieveProductsFor(text, limit) {
   const emb = await getQueryEmbedding(text);
@@ -3587,7 +3620,7 @@ app.get('/search', async (req, res) => {
   }
 
   // ⚡ كاش الاستجابة الكاملة — الـ hit يجيب الرد فوراً
-  const responseCacheKey = `v11|${INDEX_NAME}|${query.toLowerCase().trim()}|${(synonymApplied ? synonymApplied.from : '').toLowerCase().trim()}|${limit}|${skipIntent ? '1' : '0'}|${skipAI ? '1' : '0'}|k=${filterKind || ''}|s=${filterSubtype || ''}|t=${filterTag || ''}|m=${filterMaterial || ''}`;
+  const responseCacheKey = `v12|${INDEX_NAME}|${query.toLowerCase().trim()}|${(synonymApplied ? synonymApplied.from : '').toLowerCase().trim()}|${limit}|${skipIntent ? '1' : '0'}|${skipAI ? '1' : '0'}|k=${filterKind || ''}|s=${filterSubtype || ''}|t=${filterTag || ''}|m=${filterMaterial || ''}`;
   const cachedResponse = responseCache.get(responseCacheKey);
   if (cachedResponse) {
     console.log(`⚡ Response cache hit: "${query}"`);
@@ -3911,10 +3944,36 @@ app.get('/search', async (req, res) => {
     // 🚑 إنقاذ بالذكاء الاصطناعي — آخر درجة في السُلّم، بعد المرادفات
     // والتصحيح الإملائي وإعادة البحث. يعمل فقط عند الصفر المطلق، وقفزة واحدة
     // بلا تكرار. للتعطيل: ?skipRescue=true
+    // ✍️ الخطوة الأولى: تصحيح إملائي بالذكاء الصناعي، ثم يعاد البحث بالجملة المصححة
+    // (نفس Elasticsearch + الفلاتر). لو بقيت صفراً يكمل الإنقاذ الأصلي على الجملة المصححة.
+    let spellFixed = null;
+    if (products.length === 0 && req.query.skipRescue !== 'true') {
+      try {
+        const spellT0 = Date.now();
+        spellFixed = await aiSpellFix(query);
+        if (spellFixed) {
+          const found = await researchCorrected(spellFixed, query, searchType.deviceKeyword, limit);
+          trace('ai_spell', { from: query, to: spellFixed, count: found.length, ms: Date.now() - spellT0 });
+          if (found.length > 0) {
+            products = found;
+            aiRescue = { from: query, to: spellFixed, count: found.length, ms: Date.now() - spellT0, via: 'spell' };
+            console.log(`✍️ ai spell "${query}" → "${spellFixed}": ${found.length} products`);
+          }
+        }
+      } catch (e) {
+        rescueErrored = true;
+        console.warn('✍️ ai spell failed:', e.message);
+      }
+    }
+
     if (products.length === 0 && knnNeighbourhood.length >= 3 && req.query.skipRescue !== 'true') {
       try {
         const rescueT0 = Date.now();
-        const term = await aiRescueTerm(query, knnNeighbourhood);
+        // لو انصححت الجملة: المفردات من أقرب 30 منتج للجملة المصححة، لا للمكتوبة غلط
+        const neighbourhood = spellFixed
+          ? (await retrieveProductsFor(spellFixed, 100)).slice(0, RESCUE_NEIGHBOURS)
+          : knnNeighbourhood;
+        const term = await aiRescueTerm(spellFixed || query, neighbourhood.length >= 3 ? neighbourhood : knnNeighbourhood);
         if (term) {
           const rescued = await rescueProductsForTerm(term, searchType.deviceKeyword, limit);
           if (rescued.length > 0) {
@@ -4041,11 +4100,20 @@ app.get('/rescue/inspect', async (req, res) => {
       classifySearchType(query),
       quickCountForQuery(query),
     ]);
-    const neighbourhood = (await retrieveProductsFor(query, 100)).slice(0, RESCUE_NEIGHBOURS);
+    let neighbourhood = (await retrieveProductsFor(query, 100)).slice(0, RESCUE_NEIGHBOURS);
     const info = { model };
     let term = null, shown = [];
-    if (neighbourhood.length >= 3) {
-      term = await aiRescueTerm(query, neighbourhood, info);
+    // ✍️ نفس ترتيب /search: التصحيح الإملائي أولاً
+    const spellTo = await aiSpellFix(query, model);
+    const spellFound = spellTo ? await researchCorrected(spellTo, query, searchType.deviceKeyword, 500) : [];
+    if (spellFound.length > 0) {
+      info.stop = 'spell_found';
+    } else if (neighbourhood.length >= 3) {
+      if (spellTo) {
+        const fixedNear = (await retrieveProductsFor(spellTo, 100)).slice(0, RESCUE_NEIGHBOURS);
+        if (fixedNear.length >= 3) neighbourhood = fixedNear;
+      }
+      term = await aiRescueTerm(spellTo || query, neighbourhood, info);
       if (term) shown = await rescueProductsForTerm(term, searchType.deviceKeyword, 500);
     } else {
       info.stop = 'vocab_too_small';
@@ -4055,6 +4123,7 @@ app.get('/rescue/inspect', async (req, res) => {
       model,
       live: model === LLM_MODEL,
       strictCount,
+      spell: { to: spellTo, count: spellFound.length, shown: spellFound.slice(0, 30).map(p => p.title) },
       neighbourhood: neighbourhood.slice(0, 10).map(p => p.title),
       vocab: info.vocab || [],
       proposed: info.proposed || [],
@@ -4093,7 +4162,7 @@ app.get('/search/ai', async (req, res) => {
   }
 
   // كاش
-  const cacheKey = `ai8|${INDEX_NAME}|${query.toLowerCase().trim()}|${skipIntent ? '1' : '0'}`;
+  const cacheKey = `ai9|${INDEX_NAME}|${query.toLowerCase().trim()}|${skipIntent ? '1' : '0'}`;
   const cached = responseCache.get(cacheKey);
   if (cached) {
     console.log(`⚡ AI cache hit: "${query}"`);
