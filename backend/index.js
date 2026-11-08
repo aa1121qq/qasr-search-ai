@@ -3498,10 +3498,11 @@ async function aiSpellFix(query, model = null) {
   const prompt = `أنت مدقق إملائي لبحث متجر أدوات منزلية وأجهزة كهربائية سعودي.
 العميل كتب: "${query}"
 
-صحّح الأخطاء الإملائية فقط، بالكتابة الشائعة لأسماء المنتجات في المتاجر السعودية.
-افصل الكلمات الملتصقة. لا تغيّر المعنى، ولا تضف كلمات، ولا تستبدل المنتج بمنتج آخر.
+صحّح الأخطاء الإملائية فقط، واكتب كل كلمة بالشكل الفصيح المفرد كما تُكتب في عناوين المنتجات.
+يشمل ذلك: الحروف المتشابهة (ض/ظ، ق/ج/غ، ة/ه، ى/ي/ا، الهمزات)، والكلمات الملتصقة (افصلها)،
+والجمع العامي لاسم المنتج (حوّله لمفرده)، والأسماء الأجنبية المكتوبة بالعربي (اكتبها بشكلها الشائع).
+لا تغيّر المعنى، ولا تضف كلمات، ولا تستبدل المنتج بمنتج آخر.
 لو الجملة صحيحة، أعِدها كما هي.
-أمثلة: "مكاين سبرسو" ← "مكاين إسبريسو" · "قلايه هوايه" ← "قلاية هوائية" · "جدرظغط غيرلاصق" ← "قدر ضغط غير لاصق"
 
 JSON: {"corrected": "..."}`;
 
@@ -3620,7 +3621,7 @@ app.get('/search', async (req, res) => {
   }
 
   // ⚡ كاش الاستجابة الكاملة — الـ hit يجيب الرد فوراً
-  const responseCacheKey = `v12|${INDEX_NAME}|${query.toLowerCase().trim()}|${(synonymApplied ? synonymApplied.from : '').toLowerCase().trim()}|${limit}|${skipIntent ? '1' : '0'}|${skipAI ? '1' : '0'}|k=${filterKind || ''}|s=${filterSubtype || ''}|t=${filterTag || ''}|m=${filterMaterial || ''}`;
+  const responseCacheKey = `v13|${INDEX_NAME}|${query.toLowerCase().trim()}|${(synonymApplied ? synonymApplied.from : '').toLowerCase().trim()}|${limit}|${skipIntent ? '1' : '0'}|${skipAI ? '1' : '0'}|k=${filterKind || ''}|s=${filterSubtype || ''}|t=${filterTag || ''}|m=${filterMaterial || ''}`;
   const cachedResponse = responseCache.get(responseCacheKey);
   if (cachedResponse) {
     console.log(`⚡ Response cache hit: "${query}"`);
@@ -4162,7 +4163,7 @@ app.get('/search/ai', async (req, res) => {
   }
 
   // كاش
-  const cacheKey = `ai9|${INDEX_NAME}|${query.toLowerCase().trim()}|${skipIntent ? '1' : '0'}`;
+  const cacheKey = `ai10|${INDEX_NAME}|${query.toLowerCase().trim()}|${skipIntent ? '1' : '0'}`;
   const cached = responseCache.get(cacheKey);
   if (cached) {
     console.log(`⚡ AI cache hit: "${query}"`);
