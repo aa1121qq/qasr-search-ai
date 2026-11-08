@@ -44,11 +44,15 @@ const OLLAMA_LLM_MODEL = process.env.OLLAMA_LLM_MODEL || 'qwen2.5:3b';
 const LLM_MODEL   = process.env.OPENAI_LLM_MODEL   || 'gpt-4.1';
 const IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1-mini';
 // موديلات التفكير (gpt-5+ / gpt-6 / o-series) ترفض temperature وmax_tokens
-const IS_REASONING_LLM = /^(gpt-[5-9]|od)/i.test(LLM_MODEL);
 const LLM_REASONING_EFFORT = process.env.OPENAI_REASONING_EFFORT || 'none';
-function llmParams(temperature, maxTokens) {
-  if (IS_REASONING_LLM) {
-    return { reasoning_effort: LLM_REASONING_EFFORT, ...(maxTokens ? { max_completion_tokens: maxTokens } : {}) };
+// موديلات للمقارنة في صفحة الإنقاذ فقط — البحث يستخدم LLM_MODEL
+const COMPARE_LLM_MODELS = ['gpt-6-luna', 'gpt-5-nano'];
+function llmParams(temperature, maxTokens, model = LLM_MODEL) {
+  if (/^(gpt-[5-9]|o\d)/i.test(model)) {
+    // أقل مستوى تفكير: gpt-5/-mini/-nano تبدأ من minimal، والأحدث من none
+    const effort = model === LLM_MODEL ? LLM_REASONING_EFFORT
+      : (/^gpt-5(-mini|-nano)?$/i.test(model) ? 'minimal' : 'none');
+    return { reasoning_effort: effort, ...(maxTokens ? { max_completion_tokens: maxTokens } : {}) };
   }
   return { temperature, ...(maxTokens ? { max_tokens: maxTokens } : {}) };
 }
@@ -619,7 +623,7 @@ async function classifySearchType(query) {
 const COHERE_CHAT_MODEL = 'command-r-08-2024';
 const COHERE_VISION_MODEL = 'command-a-vision-07-2025';
 
-async function cohereChat({ prompt, history = [], jsonMode = true, temperature = 0.3, maxTokens }) {
+async function cohereChat({ prompt, history = [], jsonMode = true, temperature = 0.3, maxTokens, model = null }) {
   // 🔄 dispatch chain: Local → Cohere → OpenAI fallback (يضمن استمرار العمل)
   if (USE_LOCAL_LLM) {
     try { return await localChat({ prompt, history, jsonMode, temperature }); }
@@ -655,9 +659,9 @@ async function cohereChat({ prompt, history = [], jsonMode = true, temperature =
     { role: 'user', content: prompt },
   ];
   const completion = await openai.chat.completions.create({
-    model: LLM_MODEL,
+    model: model || LLM_MODEL,
     messages,
-    ...llmParams(temperature, maxTokens),
+    ...llmParams(temperature, maxTokens, model || LLM_MODEL),
     response_format: jsonMode ? { type: 'json_object' } : undefined,
   });
   return completion.choices[0].message.content;
@@ -3375,7 +3379,7 @@ JSON: {"terms": ["..."]}`;
 
   let terms = [];
   try {
-    const text = await cohereChat({ prompt, jsonMode: true, temperature: 0, maxTokens: 120 });
+    const text = await cohereChat({ prompt, jsonMode: true, temperature: 0, maxTokens: 120, model: info?.model || null });
     const parsed = JSON.parse(text);
     terms = Array.isArray(parsed.terms) ? parsed.terms.slice(0, RESCUE_MAX_TERMS) : [];
   } catch (e) {
@@ -4029,6 +4033,8 @@ app.get('/search', async (req, res) => {
 app.get('/rescue/inspect', async (req, res) => {
   const query = String(req.query.q || '').trim().slice(0, 200);
   if (!query) return res.status(400).json({ error: 'q مطلوب' });
+  // ?model= للمقارنة: الموديل الحالي أو أحد موديلات المقارنة فقط
+  const model = [LLM_MODEL, ...COMPARE_LLM_MODELS].includes(req.query.model) ? req.query.model : LLM_MODEL;
   const t0 = Date.now();
   try {
     const [searchType, strictCount] = await Promise.all([
@@ -4036,7 +4042,7 @@ app.get('/rescue/inspect', async (req, res) => {
       quickCountForQuery(query),
     ]);
     const neighbourhood = (await retrieveProductsFor(query, 100)).slice(0, RESCUE_NEIGHBOURS);
-    const info = {};
+    const info = { model };
     let term = null, shown = [];
     if (neighbourhood.length >= 3) {
       term = await aiRescueTerm(query, neighbourhood, info);
@@ -4046,7 +4052,8 @@ app.get('/rescue/inspect', async (req, res) => {
     }
     res.json({
       query,
-      model: LLM_MODEL,
+      model,
+      live: model === LLM_MODEL,
       strictCount,
       neighbourhood: neighbourhood.slice(0, 10).map(p => p.title),
       vocab: info.vocab || [],

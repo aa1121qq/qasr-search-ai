@@ -3,6 +3,8 @@ import axios from 'axios'
 import './RescueLab.css'
 
 // 🚑 صفحة "إنقاذ الذكاء الصناعي": تكتب جملة، وتشوف وش يسوي الإنقاذ خطوة خطوة — بدون عرض المنتجات
+const COMPARE_MODELS = ['gpt-5-nano', 'gpt-6-luna']
+
 const GATE_REASON = {
   too_many_words: 'أكثر من 3 كلمات',
   outside_vocab: 'فيه كلمة مو من الكلمات المسموحة',
@@ -17,7 +19,9 @@ function RescueResult({ r }) {
     <div className="rl-card">
       <div className="rl-card-head">
         <span className="rl-query">«{r.query}»</span>
-        <span className="rl-meta">{(r.ms / 1000).toFixed(1)} ث · {r.model}</span>
+        <span className="rl-meta">
+          <b className={r.live ? 'rl-live' : ''}>{r.model}</b>{r.live ? ' (البحث الحالي)' : ' (للمقارنة)'} · {(r.ms / 1000).toFixed(1)} ث
+        </span>
       </div>
 
       <div className={`rl-verdict ${r.chosen ? 'ok' : 'none'}`}>
@@ -97,8 +101,13 @@ export default function RescueLab({ apiUrl, modeSwitch }) {
     setLoading(true)
     setError('')
     try {
-      const res = await axios.get(`${apiUrl}/rescue/inspect`, { params: { q } })
-      setResults(prev => [res.data, ...prev].slice(0, 20))
+      // نفس الجملة على الموديلين بالتوازي: الحالي (gpt-5-nano) ولونا للمقارنة
+      const runs = await Promise.all(COMPARE_MODELS.map(model =>
+        axios.get(`${apiUrl}/rescue/inspect`, { params: { q, model } })
+          .then(res => res.data)
+          .catch(err => ({ query: q, model, error: err.response?.data?.error || err.message }))
+      ))
+      setResults(prev => [{ query: q, runs }, ...prev].slice(0, 20))
       setText('')
     } catch (err) {
       setError(err.response?.data?.error || err.message)
@@ -126,7 +135,13 @@ export default function RescueLab({ apiUrl, modeSwitch }) {
           </button>
         </form>
         {error && <div className="rl-error">صار خطأ: {error}</div>}
-        {results.map((r, i) => <RescueResult key={`${r.query}-${results.length - i}`} r={r} />)}
+        {results.map((g, i) => (
+          <div key={`${g.query}-${results.length - i}`} className="rl-compare">
+            {g.runs.map(r => r.error
+              ? <div key={r.model} className="rl-card"><div className="rl-error">{r.model}: {r.error}</div></div>
+              : <RescueResult key={r.model} r={r} />)}
+          </div>
+        ))}
       </div>
     </div>
   )
