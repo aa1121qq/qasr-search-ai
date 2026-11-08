@@ -16,6 +16,7 @@ function RescueResult({ r }) {
   const [openShown, setOpenShown] = useState(false)
   const [openNear, setOpenNear] = useState(false)
   const [openSpell, setOpenSpell] = useState(false)
+  const [openKw, setOpenKw] = useState(false)
   return (
     <div className="rl-card">
       <div className="rl-card-head">
@@ -25,12 +26,14 @@ function RescueResult({ r }) {
         </span>
       </div>
 
-      <div className={`rl-verdict ${r.spell?.count > 0 || r.chosen ? 'ok' : 'none'}`}>
+      <div className={`rl-verdict ${r.spell?.count > 0 || r.chosen || r.keyword?.to ? 'ok' : 'none'}`}>
         {r.spell?.count > 0
           ? <>✍️ التصحيح الإملائي يكفي: يعرض <b>«{r.spell.to}»</b> — {r.spell.count} منتج</>
           : r.chosen
             ? <>✅ الإنقاذ يعرض: <b>«{r.chosen}»</b> — {r.shownCount} منتج</>
-            : <>⛔ ما في إنقاذ — العميل يشوف صفحة "لم نجد نتائج"</>}
+            : r.keyword?.to
+              ? <>🔑 الكلمة الأساسية: يعرض كل ما يتعلق بـ <b>«{r.keyword.to}»</b> — {r.keyword.count} منتج</>
+              : <>⛔ ما في إنقاذ — العميل يشوف صفحة "لم نجد نتائج"</>}
       </div>
 
       <ol className="rl-steps">
@@ -100,6 +103,23 @@ function RescueResult({ r }) {
           </li>
         )}
         </>}
+        {r.keyword && (
+          <li>
+            <div className="rl-step-title">الكلمة الأساسية (الخطوة الأخيرة)</div>
+            <div className="rl-step-body">
+              جرّب: {r.keyword.tried.length
+                ? r.keyword.tried.map((w, i) => <span key={i} className="rl-chip rl-chip-sm">{w}</span>)
+                : <span className="rl-muted">ولا كلمة</span>}
+              <div>
+                {r.keyword.to
+                  ? <>لقى <b>{r.keyword.count}</b> منتج فيها «{r.keyword.to}»
+                      <button className="rl-link" onClick={() => setOpenKw(!openKw)}>{openKw ? 'إخفاء' : 'وش هي؟'}</button></>
+                  : <span className="rl-muted">ما لقى منتج فيه أي كلمة منها.</span>}
+              </div>
+              {openKw && <ul className="rl-judged">{r.keyword.shown.map((t, i) => <li key={i}>{t}</li>)}</ul>}
+            </div>
+          </li>
+        )}
       </ol>
     </div>
   )

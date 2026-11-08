@@ -3316,6 +3316,45 @@ const RESCUE_MAX_TERMS = 3;
 const RESCUE_VOCAB_MAX = 30;
 const RESCUE_NEIGHBOURS = 30;
 const rescueCache = new Map();   // query → term | null (يحفظ السالب أيضاً)
+const rescueProposals = new Map();   // query → ما اقترحه الموديل (لخطوة الكلمة الأساسية)
+function rememberRescueProposals(query, terms) {
+  const key = (query || '').trim().toLowerCase();
+  if (rescueProposals.size >= RESCUE_CACHE_MAX) rescueProposals.delete(rescueProposals.keys().next().value);
+  rescueProposals.set(key, (terms || []).map(t => String(t || '').trim()).filter(Boolean));
+}
+
+// 🔑 الخطوة الأخيرة عند الصفر: الكلمة الأساسية وحدها.
+// "محضر آيسكريم" → "آيسكريم" ← أي منتج فيه الكلمة (بتجاهل المسافات: آيس كريم).
+// المرشحون بالترتيب: كلمات مقترحات الإنقاذ (من مفردات الكتالوج)، ثم الجملة المصححة، ثم الأصلية.
+const KEYWORD_SKIP = new Set([
+  ...GENERIC_DEVICE_WORDS, ...SUBJECT_MODIFIERS,
+  'محضر', 'محضرة', 'اداة', 'أداة', 'أدوات', 'ادوات', 'شي', 'شيء', 'جهاز', 'اجهزة', 'أجهزة',
+].map(w => normalizeArabicText(w)));
+function keywordForm(word) {
+  let w = normalizeArabicText(String(word || '')).replace(/[^ء-يa-z0-9]/gi, '');
+  if (w.startsWith('وال') && w.length > 5) w = w.slice(1);
+  if (w.startsWith('ال') && w.length > 4) w = w.slice(2);
+  return w;
+}
+async function keywordFallback(texts, limit) {
+  const tried = [];
+  const seen = new Set();
+  for (const text of texts) {
+    for (const raw of String(text || '').split(/\s+/)) {
+      const kw = keywordForm(raw);
+      if (kw.length < 3 || seen.has(kw) || KEYWORD_SKIP.has(kw) || KEYWORD_SKIP.has(normalizeArabicText(raw))) continue;
+      seen.add(kw);
+      tried.push(kw);
+      const found = (await retrieveProductsFor(kw, limit)).filter(p =>
+        normalizeArabicText(String(p.title || '')).replace(/\s+/g, '').includes(kw));
+      const dedup = new Set();
+      const products = found.filter(p => { const k = (p.title || '').trim().toLowerCase(); if (dedup.has(k)) return false; dedup.add(k); return true; });
+      if (products.length > 0) return { word: raw.replace(/^و?ال(?=.{3,})/, ''), products, tried };
+      if (tried.length >= 6) return { word: null, products: [], tried };
+    }
+  }
+  return { word: null, products: [], tried };
+}
 
 // كلمات لا تصف فئة منتج — تُستبعد من قائمة المصطلحات المسموحة
 const RESCUE_STOPWORDS = new Set([
@@ -3388,6 +3427,8 @@ JSON: {"terms": ["..."]}`;
     return remember(null);
   }
   if (info) info.proposed = terms.map(t => String(t || '').trim()).filter(Boolean);
+  // نحفظ المقترحات (حتى المرفوضة) — كلمات كتالوج تستفيد منها خطوة "الكلمة الأساسية"
+  rememberRescueProposals(query, terms);
 
   // 🛡️ نفحص كل المرشحين ثم نُفضّل الأخص (الأكثر كلمات) — لا أول ما يصلح.
   // الكلمة الواحدة العامة مثل "ايس" تجتاز العدّة لكنها تُرجع نتائج غير ذات صلة.
@@ -3621,7 +3662,7 @@ app.get('/search', async (req, res) => {
   }
 
   // ⚡ كاش الاستجابة الكاملة — الـ hit يجيب الرد فوراً
-  const responseCacheKey = `v13|${INDEX_NAME}|${query.toLowerCase().trim()}|${(synonymApplied ? synonymApplied.from : '').toLowerCase().trim()}|${limit}|${skipIntent ? '1' : '0'}|${skipAI ? '1' : '0'}|k=${filterKind || ''}|s=${filterSubtype || ''}|t=${filterTag || ''}|m=${filterMaterial || ''}`;
+  const responseCacheKey = `v14|${INDEX_NAME}|${query.toLowerCase().trim()}|${(synonymApplied ? synonymApplied.from : '').toLowerCase().trim()}|${limit}|${skipIntent ? '1' : '0'}|${skipAI ? '1' : '0'}|k=${filterKind || ''}|s=${filterSubtype || ''}|t=${filterTag || ''}|m=${filterMaterial || ''}`;
   const cachedResponse = responseCache.get(responseCacheKey);
   if (cachedResponse) {
     console.log(`⚡ Response cache hit: "${query}"`);
@@ -3990,6 +4031,23 @@ app.get('/search', async (req, res) => {
       }
     }
 
+    // 🔑 الخطوة الأخيرة: لو بقي صفر بعد التصحيح والإنقاذ — الكلمة الأساسية وحدها
+    if (products.length === 0 && req.query.skipRescue !== 'true') {
+      try {
+        const kwT0 = Date.now();
+        const proposals = rescueProposals.get((spellFixed || query).trim().toLowerCase()) || [];
+        const kw = await keywordFallback([...proposals, spellFixed, query], limit);
+        trace('keyword_fallback', { tried: kw.tried, to: kw.word, count: kw.products.length, ms: Date.now() - kwT0 });
+        if (kw.word) {
+          products = kw.products;
+          aiRescue = { from: query, to: kw.word, count: kw.products.length, ms: Date.now() - kwT0, via: 'keyword' };
+          console.log(`🔑 keyword "${query}" → "${kw.word}": ${kw.products.length} products`);
+        }
+      } catch (e) {
+        console.warn('🔑 keyword fallback failed:', e.message);
+      }
+    }
+
     // ⚡ intent سريع:
     // - لو في typo: نعرض 3 اقتراحات تصحيحية ديناميكية (بدل intent chips التصنيفية)
     // - لو لا typo: نعرض intent chips العادي (categories من القاموس أو إحصائي)
@@ -4119,11 +4177,18 @@ app.get('/rescue/inspect', async (req, res) => {
     } else {
       info.stop = 'vocab_too_small';
     }
+    // 🔑 الخطوة الأخيرة لو كل ما قبلها صفر
+    let keyword = null;
+    if (spellFound.length === 0 && shown.length === 0) {
+      const kw = await keywordFallback([...(info.proposed || []), spellTo, query], 500);
+      keyword = { to: kw.word, tried: kw.tried, count: kw.products.length, shown: kw.products.slice(0, 30).map(p => p.title) };
+    }
     res.json({
       query,
       model,
       live: model === LLM_MODEL,
       strictCount,
+      keyword,
       spell: { to: spellTo, count: spellFound.length, shown: spellFound.slice(0, 30).map(p => p.title) },
       neighbourhood: neighbourhood.slice(0, 10).map(p => p.title),
       vocab: info.vocab || [],
@@ -4163,7 +4228,7 @@ app.get('/search/ai', async (req, res) => {
   }
 
   // كاش
-  const cacheKey = `ai10|${INDEX_NAME}|${query.toLowerCase().trim()}|${skipIntent ? '1' : '0'}`;
+  const cacheKey = `ai11|${INDEX_NAME}|${query.toLowerCase().trim()}|${skipIntent ? '1' : '0'}`;
   const cached = responseCache.get(cacheKey);
   if (cached) {
     console.log(`⚡ AI cache hit: "${query}"`);
