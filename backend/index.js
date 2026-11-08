@@ -3491,6 +3491,121 @@ async function runRescue(query, deviceKeyword, limit, info = null) {
   return { terms, term: null, products: [] };
 }
 
+// ═══════════════════════════════════════════════════════════════
+// 🕰️ الإنقاذ الأصلي (قبل تعديلات 2026-11-05) — للعرض في صفحة الإنقاذ فقط، لا يستخدمه /search
+// المفردات من أقرب 30 منتج للجملة، الموديل يركّب منها مصطلحاً، ولا يوجد فحص صلة.
+// ═══════════════════════════════════════════════════════════════
+const LEGACY_RESCUE_STOPWORDS = new Set([
+  'واط', 'لتر', 'مل', 'سم', 'كيلو', 'جرام', 'انش', 'بار', 'فولت', 'هرتز',
+  'قطعة', 'قطع', 'حبة', 'حبات', 'طقم', 'مقاس', 'عدد', 'موديل',
+  'اسود', 'ابيض', 'رمادي', 'فضي', 'ذهبي', 'احمر', 'ازرق', 'اخضر', 'بني',
+  'ملون', 'وردي', 'بيج', 'كحلي', 'شفاف', 'مع', 'من', 'الجديدة', 'الجديد',
+].map(w => normalizeArab(w)));
+
+function buildLegacyRescueVocab(neighbourhood) {
+  const freq = new Map();
+  for (const p of neighbourhood) {
+    for (const raw of String(p.title || '').split(/\s+/)) {
+      const w = raw.replace(/[^ء-يa-zA-Z]/g, '');
+      if (w.length < 3) continue;
+      const norm = normalizeArab(w.toLowerCase());
+      if (!norm || LEGACY_RESCUE_STOPWORDS.has(norm)) continue;
+      const entry = catalogVocab.get(norm);
+      if (!entry || entry.count < 2) continue;
+      freq.set(entry.display, (freq.get(entry.display) || 0) + 1);
+    }
+  }
+  return [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30).map(e => e[0]);
+}
+
+async function runLegacyRescue(query, deviceKeyword, limit, info) {
+  // تقريب: الأصلي كان يأخذ أول 30 منتج من نتائج /search قبل الفلاتر؛ هنا من الاسترجاع الموحّد
+  const neighbourhood = (await retrieveProductsFor(query, 100)).slice(0, 30);
+  info.neighbourhood = neighbourhood.slice(0, 10).map(p => p.title);
+  const vocab = buildLegacyRescueVocab(neighbourhood);
+  info.vocab = vocab;
+  info.proposed = [];
+  info.gates = [];
+  if (neighbourhood.length < 3 || vocab.length < 3) { info.stop = 'vocab_too_small'; return null; }
+  const allowed = new Set(vocab.map(w => normalizeArab(w.toLowerCase())));
+
+  const prompt = `العميل بحث في متجر أدوات منزلية سعودي عن: "${query}"
+ولم تظهر له أي نتائج.
+
+هذه المصطلحات موجودة فعلاً في كتالوج المتجر وقريبة من بحثه:
+${vocab.join(' · ')}
+
+اختر من القائمة أعلاه فقط ما يُطابق مقصد العميل — من مصطلح واحد إلى ثلاثة.
+رتّبها من الأخص إلى الأعم، والأفضل أن يكون المصطلح من كلمتين (نوع الجهاز + نوع المنتج)
+لأن الكلمة الواحدة العامة تُرجع نتائج غير ذات صلة.
+يجوز دمج كلمتين من القائمة في مصطلح واحد (مثل: كلمة جهاز + كلمة نوع).
+ممنوع تماماً: أي كلمة من خارج القائمة · أسماء منتجات · أي شرح.
+لو لم تجد ما يُطابق مقصده، أعِد قائمة فارغة.
+
+JSON: {"terms": ["..."]}`;
+  const text = await cohereChat({ prompt, jsonMode: true, temperature: 0, maxTokens: 120 });
+  const parsed = JSON.parse(text);
+  const terms = Array.isArray(parsed.terms) ? parsed.terms.slice(0, RESCUE_MAX_TERMS) : [];
+  info.proposed = terms.map(t => String(t || '').trim()).filter(Boolean);
+
+  const valid = [];
+  for (const term of info.proposed) {
+    const words = term.split(/\s+/).filter(Boolean);
+    if (words.length === 0 || words.length > 3) { info.gates.push({ term, ok: false, reason: 'too_many_words' }); continue; }
+    if (!words.every(w => allowed.has(normalizeArab(w.toLowerCase())))) { info.gates.push({ term, ok: false, reason: 'outside_vocab' }); continue; }
+    if (words.length === 1 && normalizeArab(words[0].toLowerCase()).length < 4) { info.gates.push({ term, ok: false, reason: 'too_short' }); continue; }
+    const cnt = await quickCountForQuery(term);
+    if (cnt < 2) { info.gates.push({ term, ok: false, reason: 'too_few_products', count: cnt }); continue; }
+    info.gates.push({ term, ok: true, count: cnt });
+    valid.push({ term, words: words.length });
+  }
+  if (valid.length === 0) { info.stop = 'no_valid_term'; return null; }
+  // الأصلي يفضّل الأخص (الأكثر كلمات) لا الأقرب
+  valid.sort((a, b) => b.words - a.words || b.term.length - a.term.length);
+  const term = valid[0].term;
+
+  let rescued = await retrieveProductsFor(term, limit);
+  rescued = rescued.filter(p => !isAccessory(p.title, deviceKeyword, term));
+  const termWords = term.split(/\s+/).map(w => normalizeArab(w.toLowerCase())).filter(w => w.length >= 3);
+  if (termWords.length > 0) {
+    rescued = rescued.filter(p => {
+      const t = normalizeArab(String(p.title || '').toLowerCase());
+      return termWords.every(w => t.includes(w));
+    });
+  }
+  const rSubject = extractSubject(term);
+  if (rSubject) {
+    const strict = rescued.filter(p => titleMatchesSubject(p.title, rSubject));
+    if (strict.length > 0) rescued = strict;
+  }
+  const seen = new Set();
+  rescued = rescued.filter(p => { const k = (p.title || '').trim().toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+  info.chosen = term;
+  info.shown = rescued.slice(0, 30).map(p => p.title);
+  return { term, count: rescued.length };
+}
+
+app.get('/rescue/inspect-legacy', async (req, res) => {
+  const query = String(req.query.q || '').trim().slice(0, 200);
+  if (!query) return res.status(400).json({ error: 'q مطلوب' });
+  const t0 = Date.now();
+  try {
+    const [searchType, strictCount] = await Promise.all([classifySearchType(query), quickCountForQuery(query)]);
+    const info = {};
+    const r = await runLegacyRescue(query, searchType.deviceKeyword, 500, info);
+    res.json({
+      query, model: LLM_MODEL, strictCount,
+      neighbourhood: info.neighbourhood || [], vocab: info.vocab || [],
+      proposed: info.proposed || [], gates: info.gates || [], stop: info.stop || null,
+      chosen: r ? r.term : null, shownCount: r ? r.count : 0, shown: info.shown || [],
+      ms: Date.now() - t0,
+    });
+  } catch (e) {
+    console.warn('🕰️ legacy inspect failed:', e.message);
+    res.status(500).json({ error: e.message, ms: Date.now() - t0 });
+  }
+});
+
 // استرجاع موحّد لنص بحث (kNN + نصي) — يُستخدم في إعادة البحث
 async function retrieveProductsFor(text, limit) {
   const emb = await getQueryEmbedding(text);
